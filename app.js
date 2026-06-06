@@ -18,6 +18,8 @@ var qt_nhanvienRouter = require('./routes/quantri/nhanvien');
 var qt_sanphamRouter = require('./routes/quantri/sanpham');
 var paymentRouter = require('./routes/khachhang/payment.routes');
 var kh_trangchuRouter = require('./routes/khachhang/khachhang');
+var kh_khuyenmaiRouter = require('./routes/khachhang/khuyenmai');
+
 var thongkeRouter = require('./routes/quantri/thongke');
 var danhmucRouter = require('./routes/quantri/danhmuc');
 var qt_khuyenmaiRouter = require('./routes/quantri/khuyenmai');
@@ -42,6 +44,7 @@ app.use('/api/khachhang', kh_trangchuRouter);
 app.use('/api/quantri/thongke', thongkeRouter);
 app.use('/api/quantri/danhmuc', danhmucRouter);
 app.use('/api/quantri/qt_khuyenmai', qt_khuyenmaiRouter);
+app.use('/api/khachhang/khuyenmai', kh_khuyenmaiRouter);
 
 
 app.use('/', indexRouter);

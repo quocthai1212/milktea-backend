@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Order = require('../../models/Order');
 const Product = require('../../models/Product');
 const User = require('../../models/User');
+const Promotion = require('../../models/Promotion'); // 💡 ĐÃ THÊM: Import Model mã giảm giá
 const { tinhPhiGiaoHang } = require('../../utils/cuaHang');
 
 async function resolveProductId(productId, productName) {
@@ -37,6 +38,7 @@ const datDonHang = async (req, res) => {
       payment_method,
       customer_cash,
       delivery,
+      promotion_code, // 💡 ĐÃ THÊM: Nhận ID mã giảm giá truyền từ Frontend lên
     } = req.body;
 
     if (!user_id) {
@@ -109,8 +111,49 @@ const datDonHang = async (req, res) => {
       products_subtotal += subtotal;
     }
 
+    // ==========================================
+    // XỬ LÝ MÃ GIẢM GIÁ (PROMOTION)
+    // ==========================================
+    let discount_amount = 0;
+    let validPromotion = null;
+
+    if (promotion_code && mongoose.Types.ObjectId.isValid(String(promotion_code))) {
+      validPromotion = await Promotion.findById(promotion_code);
+      
+      if (!validPromotion) {
+        return res.status(400).json({ message: 'Mã giảm giá không tồn tại trên hệ thống!' });
+      }
+
+      // Kiểm tra hạn sử dụng
+      const bayGio = new Date();
+      if (validPromotion.start_date && bayGio < new Date(validPromotion.start_date)) {
+        return res.status(400).json({ message: 'Mã ưu đãi này chưa đến thời gian kích hoạt sử dụng!' });
+      }
+      if (validPromotion.end_date && bayGio > new Date(validPromotion.end_date)) {
+        return res.status(400).json({ message: 'Mã giảm giá này đã hết hạn sử dụng!' });
+      }
+
+      // Kiểm tra số lượng lượt dùng còn lại
+      if (
+        validPromotion.usage_limit !== undefined && 
+        validPromotion.used_count >= validPromotion.usage_limit
+      ) {
+        return res.status(400).json({ message: 'Mã giảm giá này đã hết lượt sử dụng!' });
+      }
+
+      // Kiểm tra trạng thái hoạt động của mã
+      if (validPromotion.status === 'inactive') {
+        return res.status(400).json({ message: 'Mã ưu đãi này đã bị tạm ngưng áp dụng!' });
+      }
+
+      // Hợp lệ -> Tính toán giá trị giảm giá thực tế (không được vượt quá tổng tiền hàng)
+      discount_amount = Math.min(products_subtotal, Number(validPromotion.discount_value) || 0);
+    }
+    // ==========================================
+
     const shipping_fee = phiShip.shipping_fee;
-    const total_amount = products_subtotal + shipping_fee;
+    // 💡 ĐÃ CẬP NHẬT: Tổng tiền = Tiền hàng - Giảm giá + Phí giao hàng
+    const total_amount = Math.max(0, products_subtotal - discount_amount + shipping_fee);
 
     let cash_details = { customer_cash: 0, change_due: 0 };
     if (normalizedPaymentMethod === 'CASH') {
@@ -129,6 +172,7 @@ const datDonHang = async (req, res) => {
     const customer_name = delivery.customer_name?.trim() || user.full_name;
     const phone = delivery.phone?.trim() || user.phone || '';
 
+    // Tiến hành khởi tạo đơn hàng vào cơ sở dữ liệu
     const order = await Order.create({
       order_type: 'online',
       customer_id: user._id,
@@ -136,7 +180,8 @@ const datDonHang = async (req, res) => {
       products_subtotal,
       shipping_fee,
       distance_km: phiShip.distance_km,
-      discount_amount: 0,
+      promotion_code: validPromotion ? validPromotion._id : null, // 💡 ĐÃ LƯU: Foreign Key liên kết mã ưu đãi
+      discount_amount, // 💡 ĐÃ LƯU: Số tiền được giảm thực tế
       total_amount,
       payment_method: normalizedPaymentMethod,
       payment_status: normalizedPaymentMethod === 'PAYOS' ? 'PENDING' : 'UNPAID',
@@ -157,6 +202,13 @@ const datDonHang = async (req, res) => {
         },
       ],
     });
+
+    // 💡 ĐÃ CẬP NHẬT: Nếu đơn hàng áp dụng mã giảm giá thành công, tiến hành trừ số lượt dùng xuống
+    if (validPromotion) {
+      await Promotion.findByIdAndUpdate(validPromotion._id, {
+        $inc: { used_count: 1 } // Tăng trường `used_count` lên 1 đơn vị
+      });
+    }
 
     return res.status(201).json({
       message: 'Đặt hàng thành công!',
@@ -221,6 +273,13 @@ const huyDonHang = async (req, res) => {
       updated_at: new Date(),
     });
     await order.save();
+
+    // 💡 ĐÃ BỔ SUNG: Hoàn trả lại 1 lượt dùng mã giảm giá nếu khách hàng hủy đơn hàng ở trạng thái chờ duyệt
+    if (order.promotion_code) {
+      await Promotion.findByIdAndUpdate(order.promotion_code, {
+        $inc: { used_count: -1 } // Giảm used_count đi 1 để hoàn mã cho khách
+      });
+    }
 
     return res.status(200).json({
       message: 'Hủy đơn hàng thành công!',
