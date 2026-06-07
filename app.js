@@ -24,6 +24,16 @@ var thongkeRouter = require('./routes/quantri/thongke');
 var danhmucRouter = require('./routes/quantri/danhmuc');
 var qt_khuyenmaiRouter = require('./routes/quantri/khuyenmai');
 
+// 💡 THÊM ROUTER SHIPPER TẠI ĐÂY
+var shipperRouter = require('./routes/quantri/shipper');
+var shipperDonHangRouter = require('./routes/shipper/don_hang');
+
+// 🆕 THÊM ROUTER QUẢN LÝ ĐƠN HÀNG (CỦA ADMIN) TẠI ĐÂY
+var qt_donhangRouter = require('./routes/quantri/donhang');
+
+// 🆕 THÊM ROUTER CHO NHÂN VIÊN XỬ LÝ ĐƠN HÀNG TẠI ĐÂY
+var nhanvienDonHangRouter = require('./routes/nhanvien/load_danhsach');
+
 var app = express();
 
 // BẬT CÔNG TẮC BẢO MẬT CORS
@@ -46,6 +56,16 @@ app.use('/api/quantri/danhmuc', danhmucRouter);
 app.use('/api/quantri/qt_khuyenmai', qt_khuyenmaiRouter);
 app.use('/api/khachhang/khuyenmai', kh_khuyenmaiRouter);
 
+// 💡 ĐĂNG KÝ ĐƯỜNG DẪN API DÀNH RIÊNG CHO SHIPPER
+app.use('/api/quantri/qt_shipper', shipperRouter);
+app.use('/api/shipper', shipperDonHangRouter);
+
+// 🆕 ĐĂNG KÝ ĐƯỜNG DẪN API QUẢN LÝ ĐƠN HÀNG CHO ADMIN
+app.use('/api/quantri/donhang', qt_donhangRouter);
+
+// 🆕 ĐĂNG KÝ ĐƯỜNG DẪN API CHO NHÂN VIÊN QUẦY
+// Frontend sẽ gọi URL: http://localhost:5000/api/nhanvien/don-hang
+app.use('/api/nhanvien', nhanvienDonHangRouter);
 
 app.use('/', indexRouter);
 
@@ -56,15 +76,16 @@ mongoose.connect(process.env.MONGODB_URI)
         console.log('✅ [DATABASE] Kết nối MongoDB Atlas THÀNH CÔNG!');
         console.log('===================================================');
         
-        // 1. TỰ ĐỘNG KHỞI TẠO 3 QUYỀN BẰNG TIẾNG VIỆT (Bây giờ biến Role đã hoạt động hợp lệ)
+        // 💡 ĐÃ CẬP NHẬT: TỰ ĐỘNG KHỞI TẠO 4 QUYỀN (Thêm quyền shipper)
         const cacQuyenHienTai = await Role.countDocuments();
         if (cacQuyenHienTai === 0) {
             await Role.insertMany([
                 { _id: 1, role_name: 'quan_tri', description: 'Quản trị viên tối cao' },
                 { _id: 2, role_name: 'nhan_vien', description: 'Nhân viên hệ thống' },
-                { _id: 3, role_name: 'khach_hang', description: 'Khách hàng' }
+                { _id: 3, role_name: 'khach_hang', description: 'Khách hàng' },
+                { _id: 4, role_name: 'shipper', description: 'Nhân viên giao hàng' }
             ]);
-            console.log('🛡️ [DATABASE] Đã khởi tạo 3 nhóm quyền tiếng Việt (quan_tri, nhan_vien, khach_hang)!');
+            console.log('🛡️ [DATABASE] Đã khởi tạo 4 nhóm quyền tiếng Việt (quan_tri, nhan_vien, khach_hang, shipper)!');
         }
 
         // 2. TỰ ĐỘNG TẠO TÀI KHOẢN QUẢN TRỊ (ADMIN)

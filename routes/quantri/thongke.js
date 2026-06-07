@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
+// Import chuẩn xác đến file controller chứa 3 hàm thống kê tối ưu ở bước trước
 const thongKeController = require('../../controllers/quantri/thongke');
 
-// Cấu hình các đường dẫn endpoint API thống kê
-router.get('/thongke/khachhang', thongKeController.thongKeTheoKhachHang);
-router.get('/thongke/mathang', thongKeController.thongKeTheoMatHang);
-router.get('/thongke/thoigian', thongKeController.thongKeTheoThoiGian);
-
+// Khai báo định tuyến tương thích chuẩn xác với các lượt gọi từ Frontend của bạn
+router.get('/khachhang', thongKeController.thongKeTheoKhachHang);
+router.get('/mathang', thongKeController.thongKeTheoMatHang);
+router.get('/thoigian', thongKeController.thongKeTheoThoiGian);
+router.get('/chitiet', thongKeController.getChiTietThongKe);
 module.exports = router;

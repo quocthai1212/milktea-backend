@@ -18,7 +18,7 @@ const OrderItemSchema = new mongoose.Schema({
 const StatusHistorySchema = new mongoose.Schema({
   status: { 
     type: String, 
-    enum: ['pending', 'preparing', 'shipping', 'completed', 'cancelled'], 
+    enum: ['pending', 'preparing', 'shipping', 'completed', 'failed', 'cancelled'] ,
     required: true 
   },
   updated_at: { type: Date, default: Date.now },
@@ -29,7 +29,7 @@ const OrderSchema = new mongoose.Schema({
   order_type: { type: String, enum: ['online', 'pos'], required: true }, // online: khách đặt, pos: tại quầy
   customer_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   staff_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }, // Nhân viên xử lý hoặc tạo đơn
-  
+  shipper_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   items: [OrderItemSchema], // Danh sách các ly trà sữa đã đặt
   
   promotion_code: { type: mongoose.Schema.Types.ObjectId, ref: 'Promotion', default: null },
@@ -60,10 +60,14 @@ const OrderSchema = new mongoose.Schema({
     longitude: { type: Number },
   },
   
-  status: { 
-    type: String, 
-    enum: ['pending', 'preparing', 'shipping', 'completed', 'cancelled'], 
-    default: 'pending' 
+  status: {
+    type: String,
+    enum: ['pending', 'preparing', 'shipping', 'completed', 'failed', 'cancelled'],
+    default: 'pending'
+  },
+  cancel_reason: {
+    type: String,
+    default: null // Lưu lý do nếu rơi vào trạng thái 'failed' hoặc 'cancelled'
   },
   status_history: [StatusHistorySchema]
 }, { timestamps: true });

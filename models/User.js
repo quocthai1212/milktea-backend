@@ -20,7 +20,7 @@ const UserSchema = new mongoose.Schema({
   cccd: { type: String, default: "" },       // Số Căn cước công dân
   birthday: { type: String, default: "" },   // Ngày sinh (Lưu chuỗi "YYYY-MM-DD")
   gender: { type: String, enum: ['Nam', 'Nữ', 'Khác'], default: 'Nam' }, // Giới tính
-  role_id: { type: Number, ref: 'Role', required: true }, // 1: Admin, 2: Nhân viên, 3: Khách hàng
+  role_id: { type: Number, ref: 'Role', required: true }, // 1: Admin, 2: Nhân viên, 3: Khách hàng, 4 shiper
   
   // --- 🔒 TRẠNG THÁI TÀI KHOẢN (Áp dụng cho cả Khách và Nhân viên) ---
   is_active: { type: Boolean, default: true }, // 👈 THÊM MỚI: true = bình thường, false = bị khóa (nhân viên nghỉ việc / khách vi phạm)

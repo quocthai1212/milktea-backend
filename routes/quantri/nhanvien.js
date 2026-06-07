@@ -1,19 +1,20 @@
 const express = require('express');
 const router = express.Router();
 
-// Import file controller danh mục sản phẩm chứa các hàm CRUD
-const categoryController = require('../../controllers/quantri/danhmucsanpham');
+// Import file controller nhân viên thực tế của bạn
+const nhanVienController = require('../../controllers/quantri/nhanvien'); 
+// 💡 Lưu ý: Hãy chắc chắn đường dẫn 'require' ở trên trỏ đúng tới file controller nhân viên của bạn nhé!
 
-// 🔍 Lấy danh sách tất cả danh mục sản phẩm
-router.get('/all', categoryController.getAllCategories);
+// 🔍 Lấy danh sách tất cả nhân viên (Sửa từ getAllCategories -> getnhanvien)
+router.get('/all', nhanVienController.getnhanvien);
 
-// ➕ Thêm danh mục sản phẩm mới
-router.post('/add', categoryController.createCategory);
+// ➕ Thêm nhân viên mới (Sửa từ createCategory -> adnhanvien)
+router.post('/add', nhanVienController.adnhanvien);
 
-// ✏️ Chỉnh sửa thông tin danh mục theo ID
-router.put('/update/:id', categoryController.updateCategory);
+// ✏️ Chỉnh sửa thông tin nhân viên theo ID (Sửa từ updateCategory -> updatenhanvien)
+router.put('/update/:id', nhanVienController.updatenhanvien);
 
-// 🗑️ Xóa danh mục theo ID
-router.delete('/delete/:id', categoryController.deleteCategory);
+// 🗑️ Xóa nhân viên theo ID (Sửa từ deleteCategory -> deletenhanvien)
+router.delete('/delete/:id', nhanVienController.deletenhanvien);
 
 module.exports = router;
