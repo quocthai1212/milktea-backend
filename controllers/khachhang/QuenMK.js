@@ -13,8 +13,8 @@ const transporter = nodemailer.createTransport({
     secure: false, 
     localAddress: '0.0.0.0', // 🔥 Dòng này cứu mạng Server khỏi lỗi sập mạng IPv6 trên Render
     auth: {
-        user: '22004285@st.vlute.edu.vn', 
-        pass: 'anis tvqd xana zpsz'       
+        user: 'duonghoangquocthai000@gmail.com', 
+        pass: 'dzaq kcqf ijfv kyir'       
     },
     tls: {
         rejectUnauthorized: false 
