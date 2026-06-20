@@ -9,8 +9,8 @@ const otpCache = new Map();
 // 🎯 ĐỔI ĐOẠN NÀY TRONG FILE CONTROLLER LÀ XONG LUÔN:
 const transporter = nodemailer.createTransport({
     host: 'smtp.gmail.com',
-    port: 587,
-    secure: false, 
+    port: 465,
+    secure: true, 
     localAddress: '0.0.0.0', // 🔥 Dòng này cứu mạng Server khỏi lỗi sập mạng IPv6 trên Render
     auth: {
         user: 'duonghoangquocthai000@gmail.com', 
