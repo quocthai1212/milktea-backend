@@ -6,14 +6,20 @@ const bcrypt = require('bcryptjs'); // 👈 THÊM: Import thư viện bcrypt đ�
 const otpCache = new Map();
 
 // 1. CẤU HÌNH TRANPORTER ĐỂ GỬI MAIL (Dùng Gmail sinh viên VLUTE)
+// 🎯 ĐỔI ĐOẠN NÀY TRONG FILE CONTROLLER LÀ XONG LUÔN:
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false, 
+    localAddress: '0.0.0.0', // 🔥 Dòng này cứu mạng Server khỏi lỗi sập mạng IPv6 trên Render
     auth: {
         user: '22004285@st.vlute.edu.vn', 
         pass: 'anis tvqd xana zpsz'       
+    },
+    tls: {
+        rejectUnauthorized: false 
     }
 });
-
 /**
  * @route   POST /api/khachhang/quen-mat-khau
  * @desc    Gửi mã OTP 6 số về Email khách hàng

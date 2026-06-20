@@ -65,8 +65,8 @@ app.use('/api/nhanvien', nhanvienDonHangRouter);
 
 app.use('/api/payments', paymentRouter);
 app.use('/api/khachhang/khuyenmai', kh_khuyenmaiRouter);
-app.use('/api/khachhang', kh_trangchuRouter);
 app.use('/api/khachhang/quenmk', kh_quenmkRouter);
+app.use('/api/khachhang', kh_trangchuRouter);
 
 
 app.use('/api/shipper', shipperDonHangRouter);
