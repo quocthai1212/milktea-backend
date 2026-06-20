@@ -1,6 +1,10 @@
 const User = require('../../models/User'); 
-const nodemailer = require('nodemailer');
-const bcrypt = require('bcryptjs'); // 👈 THÊM: Import thư viện bcrypt để mã hóa
+const bcrypt = require('bcryptjs'); 
+const { Resend } = require('resend'); // 🔥 ĐÃ THAY THẾ: Import thư viện Resend thay cho Nodemailer
+
+// 1. CẤU HÌNH API KEY CỦA RESEND
+// 🎯 BẠN CẦN LÀM: Thay thế chuỗi 're_...' bên dưới bằng mã API Key bạn lấy từ trang Resend.com
+const resend = new Resend('re_XyHqMqSf_FGByQFdNPQhYvqs3dPYkSqNv'); 
 
 // Lưu tạm OTP ở bộ nhớ RAM
 const otpCache = new Map();
@@ -20,8 +24,8 @@ const transporter = nodemailer.createTransport({
     }
 });
 /**
- * @route   POST /api/khachhang/quen-mat-khau
- * @desc    Gửi mã OTP 6 số về Email khách hàng
+ * @route   POST /api/khachhang/quenmk/gui-otp
+ * @desc    Gửi mã OTP 6 số về Email khách hàng bằng HTTP API của Resend
  */
 exports.guiMaOTP = async (req, res) => {
     try {
@@ -39,17 +43,25 @@ exports.guiMaOTP = async (req, res) => {
 
         // 2. Tạo mã OTP ngẫu nhiên 6 chữ số
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        
-        // Đặt thời gian hết hạn cho OTP (3 phút)
-        const expireAt = Date.now() + 3 * 60 * 1000; 
+        const expireAt = Date.now() + 3 * 60 * 1000; // Hết hạn sau 3 phút
         
         // Lưu OTP vào cache
         otpCache.set(email, { otp, expireAt });
 
+<<<<<<< HEAD
         // 3. Cấu hình nội dung Email gửi cho khách
         const mailOptions = {
             from: '"MilkTea Paradise" <duonghoangquocthai000@gmail.com>', // 👈 Thay đổi đồng bộ với email gửi của bạn
             to: email,
+=======
+        // 3. Tiến hành gọi HTTP API gửi mail của Resend (Chạy cổng web 443 nên Render thả xích 100%)
+        const { data, error } = await resend.emails.send({
+            // ⚠️ LƯU Ý QUAN TRỌNG CHO TÀI KHOẢN FREE:
+            // - Dòng 'from' BẮT BUỘC giữ nguyên là 'onboarding@resend.dev'
+            // - Dòng 'to' (email nhận) phải là CHÍNH EMAIL bạn dùng để đăng ký tài khoản Resend khi test đồ án.
+            from: 'MilkTea Paradise <onboarding@resend.dev>', 
+            to: email, 
+>>>>>>> afcebfd (feat: chuyen doi hoan toan sang dung api resend)
             subject: '👑 [MilkTea Paradise] Mã OTP khôi phục mật khẩu của bạn',
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; padding: 20px; border-radius: 10px;">
@@ -61,15 +73,18 @@ exports.guiMaOTP = async (req, res) => {
                             ${otp}
                         </span>
                     </div>
-                    <p style="color: #777; font-size: 13px;">Nếu bạn không yêu cầu hành động này, vui lòng bỏ qua email này hoặc liên hệ hỗ trợ nếu thấy có dấu hiệu bất thường.</p>
+                    <p style="color: #777; font-size: 13px;">Nếu bạn không yêu cầu hành động này, vui lòng bỏ qua email này.</p>
                     <hr style="border: 0; border-top: 1px solid #eee;">
                     <p style="text-align: center; color: #aaa; font-size: 12px;">© 2026 MilkTea Paradise. All rights reserved.</p>
                 </div>
             `
-        };
+        });
 
-        // 4. Tiến hành gửi Mail
-        await transporter.sendMail(mailOptions);
+        // Nếu API Resend trả về lỗi (ví dụ sai API key hoặc gửi sai email nhận cho tk free)
+        if (error) {
+            console.error("Lỗi từ cổng API Resend:", error);
+            return res.status(500).json({ success: false, message: "Không thể gửi mail qua tổng đài API!" });
+        }
 
         return res.status(200).json({ 
             success: true, 
@@ -77,14 +92,14 @@ exports.guiMaOTP = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Lỗi gửi OTP:", error);
+        console.error("Lỗi hệ thống gửi OTP:", error);
         return res.status(500).json({ success: false, message: "Có lỗi xảy ra từ phía máy chủ!" });
     }
 };
 
 /**
  * @route   POST /api/khachhang/xac-nhan-otp
- * @desc    Xác thực OTP và tiến hành mã hóa, đổi mật khẩu mới
+ * @desc    Xác thực OTP và tiến hành mã hóa, đổi mật khẩu mới (Giữ nguyên)
  */
 exports.xacNhanOTPVaDoiMK = async (req, res) => {
     try {
@@ -94,41 +109,32 @@ exports.xacNhanOTPVaDoiMK = async (req, res) => {
             return res.status(400).json({ success: false, message: "Vui lòng nhập đầy đủ thông tin!" });
         }
 
-        // 1. Lấy dữ liệu OTP đã lưu trong cache ra đối chiếu
         const cachedData = otpCache.get(email);
-
         if (!cachedData) {
             return res.status(400).json({ success: false, message: "Mã OTP đã hết hạn hoặc chưa được yêu cầu!" });
         }
 
-        // 2. Kiểm tra OTP hết hạn chưa
         if (Date.now() > cachedData.expireAt) {
-            otpCache.delete(email); // Xóa mã hết hạn
+            otpCache.delete(email);
             return res.status(400).json({ success: false, message: "Mã OTP đã hết hạn sử dụng!" });
         }
 
-        // 3. Kiểm tra tính chính xác của OTP
         if (cachedData.otp !== otp) {
             return res.status(400).json({ success: false, message: "Mã OTP không chính xác!" });
         }
 
-        // 4. Tìm kiếm người dùng theo email
         const user = await User.findOne({ email });
         if (!user) {
             return res.status(404).json({ success: false, message: "Không tìm thấy người dùng!" });
         }
 
-        // 5. 🎯 TIẾN HÀNH MÃ HÓA MẬT KHẨU MỚI BẰNG BCRYPT
         const saltRound = 10;
         const hashedPassword = await bcrypt.hash(newPassword, saltRound);
 
-        // 6. Gán mật khẩu đã mã hóa và lưu lại
         user.password = hashedPassword; 
         await user.save();
 
-        // Xóa OTP khỏi cache sau khi dùng xong
         otpCache.delete(email);
-
         return res.status(200).json({ success: true, message: "Đổi mật khẩu thành công!" });
 
     } catch (error) {
