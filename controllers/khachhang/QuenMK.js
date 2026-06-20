@@ -49,7 +49,7 @@ exports.guiMaOTP = async (req, res) => {
 
         // 3. Cấu hình nội dung Email gửi cho khách
         const mailOptions = {
-            from: '"MilkTea Paradise" <22004285@st.vlute.edu.vn>', // 👈 Thay đổi đồng bộ với email gửi của bạn
+            from: '"MilkTea Paradise" <duonghoangquocthai000@gmail.com>', // 👈 Thay đổi đồng bộ với email gửi của bạn
             to: email,
             subject: '👑 [MilkTea Paradise] Mã OTP khôi phục mật khẩu của bạn',
             html: `
