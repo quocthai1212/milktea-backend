@@ -1,28 +1,13 @@
 const User = require('../../models/User'); 
 const bcrypt = require('bcryptjs'); 
-const { Resend } = require('resend'); // 🔥 ĐÃ THAY THẾ: Import thư viện Resend thay cho Nodemailer
+const { Resend } = require('resend'); // Sử dụng HTTP API của Resend
 
-// 1. CẤU HÌNH API KEY CỦA RESEND
-// 🎯 BẠN CẦN LÀM: Thay thế chuỗi 're_...' bên dưới bằng mã API Key bạn lấy từ trang Resend.com
+// 1. CẤU HÌNH API KEY CỦA RESEND (Đã điền mã key thật của bạn)
 const resend = new Resend('re_XyHqMqSf_FGByQFdNPQhYvqs3dPYkSqNv'); 
 
 // Lưu tạm OTP ở bộ nhớ RAM
 const otpCache = new Map();
 
-// 1. CẤU HÌNH TRANPORTER ĐỂ GỬI MAIL (Dùng Gmail sinh viên VLUTE)
-// 🎯 ĐỔI ĐOẠN NÀY TRONG FILE CONTROLLER LÀ XONG LUÔN:
-const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true, 
-    auth: {
-        user: 'duonghoangquocthai000@gmail.com', 
-        pass: 'dzaq kcqf ijfv kyir'       
-    },
-    tls: {
-        rejectUnauthorized: false 
-    }
-});
 /**
  * @route   POST /api/khachhang/quenmk/gui-otp
  * @desc    Gửi mã OTP 6 số về Email khách hàng bằng HTTP API của Resend
@@ -48,20 +33,13 @@ exports.guiMaOTP = async (req, res) => {
         // Lưu OTP vào cache
         otpCache.set(email, { otp, expireAt });
 
-<<<<<<< HEAD
-        // 3. Cấu hình nội dung Email gửi cho khách
-        const mailOptions = {
-            from: '"MilkTea Paradise" <duonghoangquocthai000@gmail.com>', // 👈 Thay đổi đồng bộ với email gửi của bạn
-            to: email,
-=======
-        // 3. Tiến hành gọi HTTP API gửi mail của Resend (Chạy cổng web 443 nên Render thả xích 100%)
+        // 3. Tiến hành gọi HTTP API gửi mail của Resend (Không lo bị Render chặn cổng)
         const { data, error } = await resend.emails.send({
-            // ⚠️ LƯU Ý QUAN TRỌNG CHO TÀI KHOẢN FREE:
-            // - Dòng 'from' BẮT BUỘC giữ nguyên là 'onboarding@resend.dev'
+            // ⚠️ LƯU Ý CHO TÀI KHOẢN FREE:
+            // - Dòng 'from' BẮT BUỘC giữ nguyên đuôi <onboarding@resend.dev>
             // - Dòng 'to' (email nhận) phải là CHÍNH EMAIL bạn dùng để đăng ký tài khoản Resend khi test đồ án.
             from: 'MilkTea Paradise <onboarding@resend.dev>', 
             to: email, 
->>>>>>> afcebfd (feat: chuyen doi hoan toan sang dung api resend)
             subject: '👑 [MilkTea Paradise] Mã OTP khôi phục mật khẩu của bạn',
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; padding: 20px; border-radius: 10px;">
