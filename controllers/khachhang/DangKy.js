@@ -89,6 +89,8 @@ const xuLyDangKy = async (req, res) => {
       full_name: full_name,
       phone: phone || '',
       role_id: 3, 
+      is_active: true,   
+      login_attempts: 0,
       is_vip: false,
       shipping_addresses: [
         {

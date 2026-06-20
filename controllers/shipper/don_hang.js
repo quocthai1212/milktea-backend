@@ -1,90 +1,175 @@
+const mongoose = require('mongoose'); 
 const Order = require('../../models/Order'); 
+const User = require('../../models/User'); 
 
 // =========================================================================
-// 1. LẤY DANH SÁCH ĐƠN HÀNG DÀNH CHO SHIPPER (ĐÃ BỔ SUNG LẤY ẢNH MÓN)
+// 1. LẤY DANH SÁCH ĐƠN HÀNG DÀNH CHO SHIPPER (ĐÃ FIX SẠCH LỖI ÉP KIỂU OBJECTID)
 // =========================================================================
 exports.getshipper_donhang = async (req, res) => {
   try {
     const { shipper_id } = req.query;
 
-    if (!shipper_id) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Hệ thống yêu cầu mã số ID của tài xế để đồng bộ đơn hàng!" 
-      });
+    console.log("=========================================");
+    console.log("🚀 [DEBUG] Nhận request tìm đơn cho shipper_id:", shipper_id);
+
+    // 🛡️ TẦNG 1: Chặn biến rác từ Frontend
+    if (!shipper_id || shipper_id === 'undefined' || shipper_id === 'null') {
+      return res.status(400).json({ success: false, message: "Thiếu mã định danh ID của tài xế!" });
     }
 
-    // Lấy đơn hàng đang chờ tài xế (preparing) hoặc đơn tài xế này đang/đã xử lý
-    const danhSachDonHang = await Order.find({
+    // 🔍 TẦNG 2: Tìm kiếm tài xế (Bất chấp ID là String hay ObjectId)
+    const thongTinShipper = await User.findOne({
       $or: [
-        { status: 'preparing', order_type: 'online' }, 
-        { shipper_id: shipper_id }                    
+        { _id: shipper_id },
+        { _id: mongoose.Types.ObjectId.isValid(shipper_id) ? new mongoose.Types.ObjectId(shipper_id) : null }
       ]
-    })
-    .populate('customer_id', 'full_name phone')
-    // 🔥 ĐÃ ĐỔI: Populate đi sâu vào items để lấy chính xác trường "image" từ bảng Product
-    .populate({
-      path: 'items.product_id',
-      select: 'image' 
-    })
-    .sort({ createdAt: -1 });
+    });
+    
+    if (!thongTinShipper) {
+      console.log(`❌ [DEBUG] LỖI: Không tìm thấy tài xế [${shipper_id}] trong DB.`);
+      return res.status(404).json({ success: false, message: "Không tìm thấy tài xế trên hệ thống!" });
+    }
+
+    let branch_id = thongTinShipper.branch_id;
+    if (!branch_id) {
+      console.log("❌ [DEBUG] LỖI: Tài xế chưa được gán chi nhánh (branch_id bị null/undefined).");
+      return res.status(400).json({ success: false, message: "Tài xế chưa được gán chi nhánh làm việc!" });
+    }
+
+    const branchStr = branch_id.toString();
+    const branchObjectId = mongoose.Types.ObjectId.isValid(branchStr) ? new mongoose.Types.ObjectId(branchStr) : null;
+
+    // 🛒 TẦNG 3: TRUY VẤN ĐƠN HÀNG (Sử dụng $and để bọc các $or độc lập, không lo trùng key)
+    const queryDieuKien = {
+      order_type: 'online',
+      $and: [
+        // Điều kiện 1: Đơn hàng phải thuộc chi nhánh của tài xế
+        {
+          $or: [
+            { branch_id: branchStr },
+            { branch_id: branchObjectId }
+          ]
+        },
+        // Điều kiện 2: Trạng thái đơn và phân quyền tài xế
+        {
+          $or: [
+            // Trường hợp A: Đơn mới chờ lấy (preparing/ready) và CHƯA CÓ tài xế nào nhận
+            {
+              status: { $in: ['preparing', 'ready'] },
+              $or: [
+                { shipper_id: { $exists: false } },
+                { shipper_id: null },
+                { shipper_id: { $type: "null" } }
+              ]
+            },
+            // Trường hợp B: Đơn đã nhận đích danh bởi chính shipper này
+            { 
+              $or: [
+                { shipper_id: shipper_id },
+                { shipper_id: mongoose.Types.ObjectId.isValid(shipper_id) ? new mongoose.Types.ObjectId(shipper_id) : null }
+              ]
+            }
+          ]
+        }
+      ]
+    };
+
+    console.log("🔍 [DEBUG] Tiến hành quét đơn hàng với cấu trúc chuẩn...");
+
+    const danhSachDonHang = await Order.find(queryDieuKien)
+      .populate('customer_id', 'full_name phone')
+      .populate({
+        path: 'items.product_id',
+        select: 'name image' // Nạp thêm tên và hình ảnh gốc từ bảng Product
+      })
+      .sort({ createdAt: -1 });
+
+    console.log(`📊 [DEBUG] THÀNH CÔNG: Đã tìm thấy [${danhSachDonHang.length}] đơn hàng hợp lệ.`);
+    console.log("=========================================");
 
     return res.status(200).json({
       success: true,
+      branch_id: branchStr,
       data: danhSachDonHang
     });
+
   } catch (error) {
+    console.error("❌ LỖI SẬP BACKEND (CRASH):", error);
     return res.status(500).json({
       success: false,
-      message: "Lỗi hệ thống không thể lấy danh sách đơn giao!",
+      message: "Lỗi hệ thống không thể xử lý danh sách đơn hàng!",
       error: error.message
     });
   }
 };
 
 // =========================================================================
-// 2. TÀI XẾ BẤM NHẬN ĐƠN (CẬP NHẬT TRẠNG THÁI: PREPARING -> SHIPPING)
+// 2. TÀI XẾ BẤM NHẬN ĐƠN (CẬP NHẬT TRẠNG THÁI: READY -> SHIPPING)
 // =========================================================================
 exports.nhan_donhang = async (req, res) => {
   try {
     const { id } = req.params; 
     const { shipper_id } = req.body; 
 
-    if (!shipper_id) {
-      return res.status(400).json({ success: false, message: "Không tìm thấy thông tin tài xế nhận đơn!" });
+    // 🛡️ Tầng phòng thủ định dạng ID
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Mã đơn hàng (ID) không đúng định dạng hoặc bị thiếu!" });
     }
 
-    const kiemTraDon = await Order.findById(id);
-    if (!kiemTraDon) {
-      return res.status(404).json({ success: false, message: "Đơn hàng này không tồn tại trên hệ thống!" });
-    }
-    
-    if (kiemTraDon.shipper_id && kiemTraDon.shipper_id.toString() !== shipper_id) {
-      return res.status(400).json({ success: false, message: "Đơn hàng này đã bị một tài xế khác nhận mất rồi!" });
+    if (!shipper_id || shipper_id === 'undefined' || shipper_id === 'null' || !mongoose.Types.ObjectId.isValid(shipper_id)) {
+      return res.status(400).json({ success: false, message: "Không tìm thấy thông tin định danh tài xế nhận đơn hợp lệ!" });
     }
 
-    kiemTraDon.status = 'shipping';
-    kiemTraDon.shipper_id = shipper_id;
-    
-    // 🛡️ PHÒNG THỦ: Khởi tạo mảng trống nếu lịch sử cũ bị undefined/null
-    if (!kiemTraDon.status_history) {
-      kiemTraDon.status_history = [];
+    // 🔒 SỬ DỤNG ATOMIC UPDATE: Đã loại bỏ hoàn toàn bẫy dữ liệu { shipper_id: "" } gây lỗi CastObjectId
+    const donHangCapNhat = await Order.findOneAndUpdate(
+      {
+        _id: id,
+        status: 'ready',
+        $or: [
+          { shipper_id: { $exists: false } },
+          { shipper_id: null },
+          { shipper_id: { $type: "null" } }
+        ]
+      },
+      {
+        $set: { 
+          status: 'shipping',
+          shipper_id: new mongoose.Types.ObjectId(shipper_id)
+        },
+        $push: {
+          status_history: {
+            status: 'shipping',
+            updated_at: new Date(),
+            updated_by: new mongoose.Types.ObjectId(shipper_id), 
+            reason: "Tài xế đã lấy trà sữa tại quầy và bắt đầu di chuyển đi giao."
+          }
+        }
+      },
+      { new: true } 
+    );
+
+    // 🚫 Nếu không tìm thấy đơn, điều tra chi tiết lý do để bắn lỗi chính xác lên giao diện ứng dụng
+    if (!donHangCapNhat) {
+      const donThucTe = await Order.findById(id);
+      if (!donThucTe) {
+        return res.status(404).json({ success: false, message: "Đơn hàng này không tồn tại trên hệ thống!" });
+      }
+      if (donThucTe.status === 'preparing') {
+        return res.status(400).json({ success: false, message: "Quán vẫn đang chuẩn bị nước, vui lòng đợi trạng thái sẵn sàng!" });
+      }
+      if (donThucTe.shipper_id && donThucTe.shipper_id.toString() !== shipper_id.toString()) {
+        return res.status(400).json({ success: false, message: "Đơn hàng này đã bị một tài xế khác nhận mất rồi!" });
+      }
+      return res.status(400).json({ success: false, message: "Cấu trúc trạng thái đơn hiện tại không phù hợp để nhận!" });
     }
-
-    kiemTraDon.status_history.push({
-      status: 'shipping',
-      updated_at: new Date(),
-      reason: "Tài xế đã lấy trà sữa tại quầy và bắt đầu đi giao."
-    });
-
-    await kiemTraDon.save();
 
     return res.status(200).json({
       success: true,
       message: "Nhận đơn thành công! Hãy di chuyển cẩn thận nhé tài xế.",
-      data: kiemTraDon
+      data: donHangCapNhat
     });
   } catch (error) {
+    console.error("❌ Lỗi xử lý nhận đơn hàng:", error.message);
     return res.status(500).json({
       success: false,
       message: "Gặp lỗi khi xử lý nhận đơn hàng!",
@@ -100,30 +185,33 @@ exports.hoan_thanh_donhang = async (req, res) => {
   try {
     const { id } = req.params;
 
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Mã đơn hàng (ID) không đúng định dạng!" });
+    }
+
     const donHang = await Order.findById(id);
     if (!donHang) {
       return res.status(404).json({ success: false, message: "Không tìm thấy thông tin đơn hàng này!" });
     }
 
+    // 🛡️ Kiểm tra trạng thái vận hành
     if (donHang.status !== 'shipping') {
-      return res.status(400).json({ success: false, message: "Chỉ đơn hàng đang đi giao mới có thể xác nhận hoàn thành!" });
+      return res.status(400).json({ success: false, message: "Chỉ đơn hàng ở trạng thái đang đi giao mới có thể xác nhận hoàn thành!" });
     }
 
+    // 💵 Cập nhật trạng thái thành công
     donHang.status = 'completed';
-    
-    if (donHang.payment_method === 'CASH') {
+    if (donHang.payment_method === 'CASH' || donHang.payment_method === 'tien_mat') {
       donHang.payment_status = 'PAID';
     }
 
-    // 🛡️ PHÒNG THỦ: Khởi tạo mảng trống nếu lịch sử cũ bị undefined/null
-    if (!donHang.status_history) {
-      donHang.status_history = [];
-    }
-
+    // 📝 Lưu vết lịch sử chuyển trạng thái
+    if (!donHang.status_history) donHang.status_history = [];
     donHang.status_history.push({
       status: 'completed',
       updated_at: new Date(),
-      reason: "Giao trà sữa thành công cho khách hàng."
+      updated_by: donHang.shipper_id, 
+      reason: "Giao thành công trà sữa và thu tiền từ khách hàng (nếu trả tiền mặt)."
     });
 
     await donHang.save();
@@ -134,6 +222,7 @@ exports.hoan_thanh_donhang = async (req, res) => {
       data: donHang
     });
   } catch (error) {
+    console.error("❌ Lỗi hoàn thành đơn hàng:", error.message);
     return res.status(500).json({
       success: false,
       message: "Gặp lỗi khi xử lý hoàn thành đơn hàng!",
@@ -143,12 +232,16 @@ exports.hoan_thanh_donhang = async (req, res) => {
 };
 
 // =========================================================================
-// 4. BÁO CÁO GIAO HÀNG THẤT BẠI (SHIPPING -> FAILED) - CHỐNG SẬP 500 TUYỆT ĐỐI
+// 4. BÁO CÁO GIAO HÀNG THẤT BẠI / KHÁCH BOM (SHIPPING -> FAILED)
 // =========================================================================
 exports.giao_that_bai_donhang = async (req, res) => {
   try {
     const { id } = req.params;
     const { ly_do_that_bai } = req.body; 
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Mã đơn hàng (ID) không đúng định dạng!" });
+    }
 
     const donHang = await Order.findById(id);
     if (!donHang) {
@@ -156,41 +249,35 @@ exports.giao_that_bai_donhang = async (req, res) => {
     }
 
     if (donHang.status !== 'shipping') {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Trạng thái đơn không hợp lệ! Đơn hàng phải ở trạng thái đang giao." 
-      });
+      return res.status(400).json({ success: false, message: "Trạng thái đơn không hợp lệ! Đơn hàng phải ở trạng thái đang giao mới có thể báo thất bại." });
     }
 
+    // ❌ Cập nhật thông tin hủy / bom đơn theo đúng Schema của bạn
     donHang.status = 'failed';
     donHang.cancel_reason = ly_do_that_bai || "Khách hàng không nghe máy / Bom hàng";
     
-    if (donHang.payment_method === 'CASH') {
+    if (donHang.payment_method === 'CASH' || donHang.payment_method === 'tien_mat') {
       donHang.payment_status = 'UNPAID'; 
     }
 
-    // 🛡️ PHÒNG THỦ TUYỆT ĐỐI: Tạo mảng lịch sử trống ngay lập tức nếu dữ liệu cũ trống
-    if (!donHang.status_history) {
-      donHang.status_history = [];
-    }
-
+    // 📝 Lưu vết lịch sử lỗi
+    if (!donHang.status_history) donHang.status_history = [];
     donHang.status_history.push({
       status: 'failed',
       updated_at: new Date(),
-      reason: `Tài xế báo giao thất bại. Lý do: ${donHang.cancel_reason}. Yêu cầu mang nước quay đầu trả về quán.`
+      updated_by: donHang.shipper_id,
+      reason: `Tài xế báo giao thất bại. Lý do cụ thể: ${donHang.cancel_reason}. Trả nước về quầy.`
     });
 
     await donHang.save();
 
     return res.status(200).json({
       success: true,
-      message: "Đã ghi nhận giao thất bại. Vui lòng mang túi trà sữa quay đầu hoàn trả lại quầy!",
+      message: "Đã ghi nhận giao thất bại. Vui lòng mang túi trà sữa quay đầu hoàn trả lại quầy chi nhánh!",
       data: donHang
     });
   } catch (error) {
-    // Ghi vết lỗi rõ ràng ra cửa sổ Terminal phục vụ debug
     console.error("❌ Phát hiện lỗi xử lý giao thất bại:", error.message);
-    
     return res.status(500).json({
       success: false,
       message: "Gặp lỗi khi xử lý báo cáo giao hàng thất bại!",

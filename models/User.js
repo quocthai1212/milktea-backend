@@ -24,7 +24,7 @@ const UserSchema = new mongoose.Schema({
   
   // --- 🔒 TRẠNG THÁI TÀI KHOẢN (Áp dụng cho cả Khách và Nhân viên) ---
   is_active: { type: Boolean, default: true }, // 👈 THÊM MỚI: true = bình thường, false = bị khóa (nhân viên nghỉ việc / khách vi phạm)
-
+  login_attempts: { type: Number, default: null },
   // --- 💰 CẤU HÌNH LƯƠNG NHÂN VIÊN ---
   base_salary: { type: Number, default: 25000 }, // 👈 THÊM MỚI: Mức lương theo giờ (Khách hàng thì mặc định bỏ qua không dùng trường này)
 
@@ -33,6 +33,12 @@ const UserSchema = new mongoose.Schema({
   
   // --- 🗄️ CÁC MẢNG LƯU TRỮ LỊCH SỬ (Dữ liệu động) ---
   shipping_addresses: [ShippingAddressSchema], // Khách hàng mua trà sữa sẽ đẩy địa chỉ vào đây
+
+  branch_id: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'ShippingConfig', 
+    required: null 
+  },
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', UserSchema);

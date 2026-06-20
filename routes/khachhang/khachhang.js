@@ -31,6 +31,7 @@ router.get('/don-hang/phi-ship', check(donHang.tinhPhiShip, 'tinhPhiShip'));
 router.post('/don-hang', check(donHang.datDonHang, 'datDonHang'));
 router.post('/don-hang/huy', check(donHang.huyDonHang, 'huyDonHang'));
 
+
 // =========================================================================
 // 📝 CÁC ROUTE CHỨC NĂNG KHÁC
 // =========================================================================
@@ -38,6 +39,8 @@ router.post('/tu-van', check(chatAI.xuLyTuVanAI, 'xuLyTuVanAI'));
 router.post('/dia-chi-giao-hang', check(diaChi.xuLyCapNhatDiaChi, 'xuLyCapNhatDiaChi'));
 router.get('/ho-so', check(hoSo.layHoSoKhach, 'layHoSoKhach'));
 router.put('/ho-so', check(hoSo.capNhatHoSoKhach, 'capNhatHoSoKhach'));
-router.get('/sanpham', check(trangChu.taiDanhSachSanPhamTrangChu, 'taiDanhSachSanPhamTrangChu'));
-
+router.get('/sanpham/goi-y', check(trangChu.getCustomerRecommendations, 'getCustomerRecommendations'));
+router.get('/sanpham', check(trangChu.getTrangChuData, 'getTrangChuData'));
+router.get('/sanpham/best-sellers', check(trangChu.getBestSellers, 'getBestSellers'));
+router.get('/sanpham/recommendations/:customerId', check(trangChu.getCustomerRecommendations, 'getCustomerRecommendations'));
 module.exports = router;

@@ -1,15 +1,17 @@
+const mongoose = require('mongoose'); // Thêm mongoose để phục vụ ép kiểu ObjectId trong Aggregate
 const Order = require('../../models/Order');
 const Review = require('../../models/Review');
 const Product = require('../../models/Product');
+const BadWord = require('../../models/BadWord'); 
 
 /**
  * @route   POST /api/khachhang/danh-gia
- * @desc    Tạo đánh giá / bình luận mới cho một sản phẩm trong đơn hàng đã hoàn thành
+ * @desc    Tạo đánh giá / bình luận mới (Tự động kích hoạt AI phân tích ở tầng Model)
  */
 const createReview = async (req, res) => {
   try {
     const user_id = req.user ? req.user.id : req.body.user_id;
-    const { order_id, product_id, rating, comment_text } = req.body;
+    const { order_id, product_id, rating, comment_text, review_images } = req.body;
 
     // 1. Kiểm tra đầu vào bắt buộc
     if (!user_id || !order_id || !product_id || !rating) {
@@ -19,7 +21,7 @@ const createReview = async (req, res) => {
       });
     }
 
-    // 2. Kiểm tra tính hợp lệ của số sao (Chấp nhận số lẻ bước nhảy 0.5 như 1.5, 2.5...)
+    // 2. Kiểm tra tính hợp lệ của số sao
     const numRating = Number(rating);
     if (isNaN(numRating) || numRating < 1 || numRating > 5 || numRating % 0.5 !== 0) {
       return res.status(400).json({
@@ -28,7 +30,25 @@ const createReview = async (req, res) => {
       });
     }
 
-    // 3. Xác thực đơn hàng hợp lệ (Phải hoàn thành và chứa sản phẩm được chỉ định)
+    // 3. Quét và chặn từ ngữ thô tục / cấm quy chuẩn cộng đồng
+    if (comment_text && comment_text.trim() !== "") {
+      const bannedWordsList = await BadWord.find().select('word').lean();
+      
+      if (bannedWordsList.length > 0) {
+        const pattern = bannedWordsList.map(item => item.word.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')).join('|');
+        const badWordRegex = new RegExp(`(${pattern})`, 'i');
+
+        const match = comment_text.match(badWordRegex);
+        if (match) {
+          return res.status(400).json({
+            success: false,
+            message: `Bình luận của bạn chứa từ ngữ không phù hợp quy chuẩn cộng đồng ("${match[0]}"). Vui lòng chỉnh sửa lại.`
+          });
+        }
+      }
+    }
+
+    // 4. Xác thực đơn hàng hợp lệ
     const hopLe = await Order.findOne({
       _id: order_id,
       customer_id: user_id,
@@ -43,18 +63,20 @@ const createReview = async (req, res) => {
       });
     }
 
-    // 4. Tiến hành lưu bản ghi mới vào CSDL
+    // 5. Tiến hành lưu bản ghi mới vào CSDL
     const newReview = new Review({
       user_id,
       order_id,
       product_id,
       rating: numRating,
-      comment_text: comment_text ? comment_text.trim() : ""
+      comment_text: comment_text ? comment_text.trim() : "",
+      review_images: review_images || [] 
     });
 
+    // 🔥 KÍCH HOẠT AI CHẠY NGẦM
     await newReview.save();
 
-    // 5. Tự động tính toán lại và cập nhật rating tổng quan cho bảng Product
+    // 6. Tự động tính toán lại và cập nhật rating tổng quan cho bảng Product
     try {
       const stats = await Review.aggregate([
         { $match: { product_id: newReview.product_id } },
@@ -69,7 +91,7 @@ const createReview = async (req, res) => {
 
       if (stats.length > 0) {
         await Product.findByIdAndUpdate(product_id, {
-          rating_average: Math.round(stats[0].avgRating * 2) / 2, // Làm tròn đến mốc 0.5 gần nhất
+          rating_average: Math.round(stats[0].avgRating * 2) / 2, 
           review_count: stats[0].totalReviews
         });
       }
@@ -80,11 +102,10 @@ const createReview = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: "Đăng bình luận và đánh giá sản phẩm thành công!",
-      review: newReview
+      review: newReview 
     });
 
   } catch (error) {
-    // Xử lý chặn trùng lặp đánh giá theo bộ chỉ mục Unique Index mới (user_id + order_id + product_id)
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
@@ -98,13 +119,14 @@ const createReview = async (req, res) => {
   }
 };
 
-
-// Trích đoạn logic trong controllers/khachhang/danhgia.js
+/**
+ * @route   GET /api/khachhang/danh-gia/:product_id
+ * @desc    Lấy danh sách đánh giá của một sản phẩm (Tự động kèm kết quả AI trong dữ liệu)
+ */
 const getProductReviews = async (req, res) => {
   try {
     const { product_id } = req.params;
     
-    // Tìm review của sản phẩm và nạp thêm thông tin full_name của User
     const reviews = await Review.find({ product_id })
       .populate('user_id', 'full_name') 
       .sort({ createdAt: -1 });
@@ -120,7 +142,7 @@ const getProductReviews = async (req, res) => {
 
 /**
  * @route   GET /api/khachhang/don-hang
- * @desc    Lấy danh sách đơn hàng kèm trạng thái đánh giá chi tiết từng sản phẩm (Đã tối ưu O(1))
+ * @desc    Lấy danh sách đơn hàng kèm thông tin CHI NHÁNH và trạng thái đánh giá sản phẩm
  */
 const getOrders = async (req, res) => {
   try {
@@ -129,17 +151,42 @@ const getOrders = async (req, res) => {
       return res.status(400).json({ success: false, message: "Thiếu user_id!" });
     }
 
-    // 1. Lấy tất cả các đơn hàng thuộc về user này
-    const orders = await Order.find({ customer_id: user_id })
-      .sort({ createdAt: -1 })
-      .lean();
+    // Kiểm tra tính hợp lệ của chuỗi ObjectId gửi lên từ Frontend
+    if (!mongoose.isValidObjectId(user_id)) {
+      return res.status(400).json({ success: false, message: "Định dạng user_id không hợp lệ!" });
+    }
 
-    // 2. Gom tất cả ID đơn hàng đã hoàn thành ('completed') để gộp truy vấn Review
+    // 1. Sử dụng Aggregate Lookup để JOIN với collection chứa chi nhánh (shippingconfigs)
+    const orders = await Order.aggregate([
+      { 
+        $match: { 
+          customer_id: new mongoose.Types.ObjectId(user_id) 
+        } 
+      },
+      {
+        $lookup: {
+          from: 'shippingconfigs',     // Collection chứa dữ liệu chi nhánh trong cơ sở dữ liệu
+          localField: 'branch_id',     // Trường liên kết nằm trong Order
+          foreignField: '_id',         // Khóa chính nằm trong bảng chi nhánh
+          as: 'branch_info'            // Đổ tạm dữ liệu tìm được thành mảng branch_info
+        }
+      },
+      {
+        $unwind: {
+          path: '$branch_info',
+          preserveNullAndEmptyArrays: true // Giữ lại đơn hàng cũ nếu chi nhánh đó lỡ bị xóa
+        }
+      },
+      { 
+        $sort: { createdAt: -1 } 
+      }
+    ]);
+
+    // 2. Lấy danh sách ID các đơn hàng hoàn thành để map trạng thái review món
     const completedOrderIds = orders
       .filter(order => order.status === 'completed')
       .map(order => order._id);
 
-    // 3. Khởi tạo một Map tra cứu nhanh trên RAM để tránh vòng lặp dồn ép Database
     const reviewMap = new Map();
 
     if (completedOrderIds.length > 0) {
@@ -148,7 +195,6 @@ const getOrders = async (req, res) => {
         order_id: { $in: completedOrderIds }
       }).lean();
 
-      // Lưu trữ cấu trúc key theo định dạng: "idĐơnHàng_idSảnPhẩm"
       reviews.forEach(rev => {
         if (rev.order_id && rev.product_id) {
           const searchKey = `${rev.order_id.toString()}_${rev.product_id.toString()}`;
@@ -157,10 +203,12 @@ const getOrders = async (req, res) => {
       });
     }
 
-    // 4. Lập bản đồ đính kèm trạng thái bình luận vào từng Item của đơn hàng
-    orders.forEach(order => {
+    // 3. Chuẩn hóa dữ liệu đầu ra: Đè object chi nhánh & xử lý mảng items
+    const formattedOrders = orders.map(order => {
+      let updatedItems = order.items || [];
+      
       if (order.status === 'completed' && order.items) {
-        order.items = order.items.map(item => {
+        updatedItems = order.items.map(item => {
           if (item.product_id) {
             const key = `${order._id.toString()}_${item.product_id.toString()}`;
             const matchedReview = reviewMap.get(key);
@@ -171,12 +219,12 @@ const getOrders = async (req, res) => {
                 is_reviewed: true,
                 my_review: {
                   rating: matchedReview.rating,
-                  comment_text: matchedReview.comment_text
+                  comment_text: matchedReview.comment_text,
+                  ai_sentiment: matchedReview.ai_sentiment 
                 }
               };
             }
           }
-          // Trạng thái mặc định nếu sản phẩm này chưa từng được viết đánh giá
           return {
             ...item,
             is_reviewed: false,
@@ -184,11 +232,22 @@ const getOrders = async (req, res) => {
           };
         });
       }
+
+      // Đè cấu trúc `branch_id` thành một Object chứa thông tin đầy đủ thay vì chuỗi ID thô ban đầu
+      return {
+        ...order,
+        items: updatedItems,
+        branch_id: order.branch_info ? {
+          _id: order.branch_info._id,
+          branch_name: order.branch_info.branch_name,   // Đã có tên chi nhánh
+          shop_address: order.branch_info.shop_address  // Đã có địa chỉ chi nhánh
+        } : null
+      };
     });
 
     return res.status(200).json({
       success: true,
-      orders: orders
+      orders: formattedOrders
     });
 
   } catch (error) {

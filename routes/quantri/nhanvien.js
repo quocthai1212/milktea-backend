@@ -17,4 +17,6 @@ router.put('/update/:id', nhanVienController.updatenhanvien);
 // 🗑️ Xóa nhân viên theo ID (Sửa từ deleteCategory -> deletenhanvien)
 router.delete('/delete/:id', nhanVienController.deletenhanvien);
 
+router.get('/nhanvienchinhanh/all', nhanVienController.getChiNhanhAll);
+
 module.exports = router;

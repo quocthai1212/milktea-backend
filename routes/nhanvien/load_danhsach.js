@@ -1,28 +1,25 @@
 const express = require('express');
 const router = express.Router();
 
-// ĐÃ CẬP NHẬT: Bóc tách đầy đủ cả 3 hàm xử lý từ file Controller sang
+// 🛡️ Middleware kiểm tra X-User-Id từ CSDL (Chốt gác cổng an toàn)
+const authMiddleware = require('../../controllers/middlewares/authMiddleware'); 
+
+// 🎯 Import các hàm xử lý từ Controller nghiệp vụ nhân viên
 const { 
-  loadDanhSachDonHang, 
-  capNhatTrangThaiDonHang, 
-  huyDonHangNhanVien 
+  loadDanhSachDonHangChiNhanh, 
+  capNhatTrangThaiDonHang 
 } = require('../../controllers/nhanvien/load_danhsach');
 
 /**
- * TẬP HỢP ENDPOINTS DÀNH CHO NHÂN VIÊN QUẦY
- * Tiền tố gốc cấu hình tại app.js: /api/nhanvien
+ * ==========================================
+ * QUẢN LÝ TIẾN TRÌNH ĐƠN HÀNG TRỰC TUYẾN (NHÂN VIÊN)
+ * ==========================================
  */
 
-// 1. Tuyến đường lấy danh sách đơn hàng toàn hệ thống
-// URL đầy đủ: GET http://localhost:5000/api/nhanvien/don-hang
-router.get('/don-hang', loadDanhSachDonHang);
+// 1. [GET ALL] - Tải toàn bộ danh sách đơn hàng thuộc chi nhánh (hoặc toàn hệ thống đối với Admin)
+router.get('/don-hang', authMiddleware, loadDanhSachDonHangChiNhanh);
 
-// 2. Tuyến đường cập nhật các trạng thái (Đang pha chế, Đang giao, Hoàn thành)
-// URL đầy đủ: POST http://localhost:5000/api/nhanvien/don-hang/cap-nhat-trang-thai
-router.post('/don-hang/cap-nhat-trang-thai', capNhatTrangThaiDonHang);
-
-// 3. Tuyến đường hủy đơn hàng và ghi nhận lý do
-// URL đầy đủ: POST http://localhost:5000/api/nhanvien/don-hang/huy
-router.post('/don-hang/huy', huyDonHangNhanVien);
+// 2. [UPDATE] - Cập nhật trạng thái tiến trình đơn (preparing, ready, cancelled...)
+router.post('/don-hang/update', authMiddleware, capNhatTrangThaiDonHang);
 
 module.exports = router;

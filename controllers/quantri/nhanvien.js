@@ -1,31 +1,37 @@
-// Lưu ý: Thư mục hiện tại sâu hơn 1 cấp (nhanvien) nên phải đi ra bằng 3 dấu chấm (../../../models/User)
 const User = require('../../models/User'); 
+const ShippingConfig = require('../../models/ShippingConfig'); // 🌟 THÊM: Require model cấu hình chi nhánh shop
 const bcrypt = require('bcryptjs');
 
 // =========================================================================
-// 1. CHỨC NĂNG: THÊM NHÂN VIÊN MỚI (Mặc định gán role_id = 2)
+// 1. CHỨC NĂNG: LẤY DANH SÁCH (GỒM CẢ NHÂN VIÊN ROLE 2 VÀ SHIPPER ROLE 4)
 // =========================================================================
 exports.getnhanvien = async (req, res) => {
-    try {
-      // Tìm tất cả người dùng có role_id là 2 (Nhân viên), sắp xếp người mới tạo lên đầu
-      const danhSach = await User.find({ role_id: 2 }).sort({ createdAt: -1 });
-      
-      return res.status(200).json({
-        success: true,
-        data: danhSach
-      });
-    } catch (error) {
-      return res.status(500).json({ 
-        success: false, 
-        message: "Lỗi hệ thống không thể lấy danh sách nhân viên!", 
-        error: error.message 
-      });
-    }
-  };
+  try {
+    // Dùng toán tử $in để quét sạch cả tài khoản có role_id là 2 và 4
+    // .populate('branch_id') để lấy kèm thông tin chi tiết tên và địa chỉ của chi nhánh quản lý
+    const danhSach = await User.find({ role_id: { $in: [2, 4] } })
+      .populate('branch_id', 'branch_name shop_address') 
+      .sort({ createdAt: -1 });
+    
+    return res.status(200).json({
+      success: true,
+      data: danhSach
+    });
+  } catch (error) {
+    return res.status(500).json({ 
+      success: false, 
+      message: "Lỗi hệ thống không thể lấy danh sách nhân sự!", 
+      error: error.message 
+    });
+  }
+};
   
+// =========================================================================
+// 2. CHỨC NĂNG: THÊM NHÂN SỰ MỚI
+// =========================================================================
 exports.adnhanvien = async (req, res) => {
   try {
-    const { full_name, email, password, phone, cccd, birthday, gender, base_salary, is_active } = req.body;
+    const { full_name, email, password, phone, cccd, birthday, gender, base_salary, is_active, role_id, branch_id } = req.body;
 
     // Kiểm tra dữ liệu bắt buộc
     if (!full_name || !email || !password) {
@@ -37,6 +43,12 @@ exports.adnhanvien = async (req, res) => {
     if (emailDaTonTai) {
       return res.status(400).json({ success: false, message: "Email này đã tồn tại trên hệ thống!" });
     }
+    if (phone && phone.trim() !== "") {
+      const sdtDaTonTai = await User.findOne({ phone: phone.trim() });
+      if (sdtDaTonTai) {
+        return res.status(400).json({ success: false, message: "Số điện thoại này đã được đăng ký bởi tài khoản khác!" });
+      }
+    }
 
     // Mã hóa mật khẩu bảo mật
     const saltRound = 10;
@@ -46,36 +58,40 @@ exports.adnhanvien = async (req, res) => {
       full_name,
       email: email.toLowerCase(),
       password: matKhauMaHoa,
-      phone: phone || "",
+      phone: phone ? phone.trim() : "",
       cccd: cccd || "",
       birthday: birthday || "",
       gender: gender || "Nam",
-      role_id: 2, // 🎯 Tự động gán quyền Nhân viên
+      role_id: role_id ? Number(role_id) : 2, 
       base_salary: base_salary || 25000,
       is_active: is_active !== undefined ? is_active : true,
+      // 🌟 ĐÃ CẬP NHẬT: Nếu frontend gửi chuỗi rỗng "" hoặc null thì lưu vào db là null
+      branch_id: branch_id && branch_id !== "" ? branch_id : null, 
       shipping_addresses: [],
       attendance: []
     });
 
     await nhanVienMoi.save();
-    return res.status(201).json({ success: true, message: `Đã thêm nhân viên ${full_name}!`, data: nhanVienMoi });
+    
+    const loaiChucVu = nhanVienMoi.role_id === 4 ? "Shipper" : "Nhân viên";
+    return res.status(201).json({ success: true, message: `Đã thêm thành công!`, data: nhanVienMoi });
 
   } catch (error) {
-    return res.status(500).json({ success: false, message: "Lỗi hệ thống không thể thêm nhân viên!", error: error.message });
+    return res.status(500).json({ success: false, message: "Lỗi hệ thống không thể thêm nhân sự!", error: error.message });
   }
 };
 
 // =========================================================================
-// 2. CHỨC NĂNG: CHỈNH SỬA THÔNG TIN NHÂN VIÊN (Dựa vào ID trên URL)
+// 3. CHỨC NĂNG: CHỈNH SỬA THÔNG TIN & THAY ĐỔI QUYỀN HẠN / CHI NHÁNH
 // =========================================================================
 exports.updatenhanvien = async (req, res) => {
   try {
     const { id } = req.params; 
-    const { full_name, email, phone, cccd, birthday, gender, base_salary, is_active, password } = req.body;
+    const { full_name, email, phone, cccd, birthday, gender, base_salary, is_active, password, role_id, branch_id } = req.body;
 
     const nhanVien = await User.findById(id);
     if (!nhanVien) {
-      return res.status(404).json({ success: false, message: "Không tìm thấy nhân viên này!" });
+      return res.status(404).json({ success: false, message: "Không tìm thấy thông tin nhân sự này!" });
     }
 
     // Kiểm tra trùng email mới nếu có thay đổi
@@ -87,7 +103,16 @@ exports.updatenhanvien = async (req, res) => {
       nhanVien.email = email.toLowerCase();
     }
 
-    // Cập nhật các trường thông tin
+    if (phone && phone.trim() !== "") {
+      const sdtDaTonTai = await User.findOne({ 
+        phone: phone.trim(), 
+        _id: { $ne: req.params.id } // Tìm số điện thoại này nhưng phải KHÁC id đang sửa
+      });
+      if (sdtDaTonTai) {
+        return res.status(400).json({ success: false, message: "Số điện thoại này đã thuộc về tài khoản khác!" });
+      }
+    }
+    // Cập nhật các trường thông tin cơ bản
     if (full_name) nhanVien.full_name = full_name;
     if (phone !== undefined) nhanVien.phone = phone;
     if (cccd !== undefined) nhanVien.cccd = cccd;
@@ -95,6 +120,12 @@ exports.updatenhanvien = async (req, res) => {
     if (gender) nhanVien.gender = gender;
     if (base_salary) nhanVien.base_salary = base_salary;
     if (is_active !== undefined) nhanVien.is_active = is_active;
+    if (role_id !== undefined) nhanVien.role_id = Number(role_id);
+    
+    // 🌟 ĐÃ CẬP NHẬT: Cho phép thay đổi điều chuyển chi nhánh trực thuộc hoặc chuyển về null (Tự do)
+    if (branch_id !== undefined) {
+      nhanVien.branch_id = branch_id && branch_id !== "" ? branch_id : null;
+    }
 
     // Sửa mật khẩu nếu Admin nhập mật khẩu mới
     if (password && password.trim() !== "") {
@@ -103,15 +134,15 @@ exports.updatenhanvien = async (req, res) => {
     }
 
     await nhanVien.save();
-    return res.status(200).json({ success: true, message: "Cập nhật thông tin nhân viên thành công!", data: nhanVien });
+    return res.status(200).json({ success: true, message: "Cập nhật dữ liệu nhân sự thành công!", data: nhanVien });
 
   } catch (error) {
-    return res.status(500).json({ success: false, message: "Lỗi hệ thống không thể sửa nhân viên!", error: error.message });
+    return res.status(500).json({ success: false, message: "Lỗi hệ thống không thể sửa thông tin nhân sự!", error: error.message });
   }
 };
 
 // =========================================================================
-// 3. CHỨC NĂNG: XÓA NHÂN VIÊN KHỎI HỆ THỐNG
+// 4. CHỨC NĂNG: XÓA NHÂN SỰ KHỎI HỆ THỐNG
 // =========================================================================
 exports.deletenhanvien = async (req, res) => {
   try {
@@ -119,12 +150,33 @@ exports.deletenhanvien = async (req, res) => {
 
     const nhanVienBiXoa = await User.findByIdAndDelete(id);
     if (!nhanVienBiXoa) {
-      return res.status(404).json({ success: false, message: "Không tìm thấy nhân viên để xóa!" });
+      return res.status(404).json({ success: false, message: "Không tìm thấy đối tượng cần xóa!" });
     }
 
-    return res.status(200).json({ success: true, message: `Đã xóa hoàn toàn nhân viên ${nhanVienBiXoa.full_name}!` });
+    return res.status(200).json({ success: true, message: `Đã xóa hoàn toàn dữ liệu của tài khoản ${nhanVienBiXoa.full_name}!` });
 
   } catch (error) {
-    return res.status(500).json({ success: false, message: "Lỗi hệ thống không thể xóa nhân viên!", error: error.message });
+    return res.status(500).json({ success: false, message: "Lỗi hệ thống không thể thực hiện lệnh xóa!", error: error.message });
+  }
+};
+
+// =========================================================================
+// 5. 🌟 CHỨC NĂNG MỚI THÊM: LẤY TOÀN BỘ DANH SÁCH CHI NHÁNH ĐỂ PHỤC VỤ Ô CHỌN
+// =========================================================================
+exports.getChiNhanhAll = async (req, res) => {
+  try {
+    // Chỉ lấy ra các chi nhánh đang mở cửa hoạt động (is_active: true)
+    const danhSachChiNhanh = await ShippingConfig.find({ is_active: true }).sort({ branch_name: 1 });
+    
+    return res.status(200).json({
+      success: true,
+      data: danhSachChiNhanh
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Lỗi hệ thống không thể quét danh sách chi nhánh!",
+      error: error.message
+    });
   }
 };

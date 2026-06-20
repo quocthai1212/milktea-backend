@@ -1,10 +1,30 @@
 const mongoose = require('mongoose');
+const ShippingConfig = require('../../models/ShippingConfig'); 
 const Order = require('../../models/Order');
 const Product = require('../../models/Product');
 const User = require('../../models/User');
 const Promotion = require('../../models/Promotion'); 
-const Review = require('../../models/Review'); // 💡 ĐÃ THÊM: Import Model Review để check trạng thái đánh giá
+const Review = require('../../models/Review'); 
 const { tinhPhiGiaoHang } = require('../../utils/cuaHang');
+
+async function getAllShippingConfigs(req, res) {
+  try {
+    const configs = await ShippingConfig.find({}).sort({ order_index: 1 });
+    
+    return res.status(200).json({
+      success: true,
+      message: "Tải danh sách cấu hình giao hàng thành công",
+      data: configs
+    });
+  } catch (error) {
+    console.error("Lỗi khi lấy dữ liệu ShippingConfig:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Không thể lấy cấu hình giao hàng từ hệ thống",
+      error: error.message
+    });
+  }
+}
 
 async function resolveProductId(productId, productName) {
   if (productId && mongoose.Types.ObjectId.isValid(String(productId))) {
@@ -18,10 +38,15 @@ async function resolveProductId(productId, productName) {
   return null;
 }
 
+/**
+ * 🌟 ĐÃ CẬP NHẬT: TÍNH PHÍ SHIP BAO LỖI BIẾN branch_id TỪ FRONTEND
+ */
 const tinhPhiShip = async (req, res) => {
   try {
     const { latitude, longitude } = req.query;
-    const ketQua = await tinhPhiGiaoHang({ latitude, longitude });
+    const branch_id = req.query.branch_id || req.query.branchId || req.query.idChiNhanh;
+
+    const ketQua = await tinhPhiGiaoHang({ latitude, longitude, branch_id });
     if (ketQua.error) {
       return res.status(400).json({ message: ketQua.error });
     }
@@ -31,10 +56,14 @@ const tinhPhiShip = async (req, res) => {
   }
 };
 
+/**
+ * 🌟 ĐÃ CẬP NHẬT: ĐẶT ĐƠN HÀNG ONLINE KHỚP CHI NHÁNH ĐƯỢC CHỌN
+ */
 const datDonHang = async (req, res) => {
   try {
     const {
       user_id,
+      branch_id, 
       items,
       payment_method,
       customer_cash,
@@ -73,7 +102,9 @@ const datDonHang = async (req, res) => {
     const phiShip = await tinhPhiGiaoHang({
       latitude: delivery.latitude,
       longitude: delivery.longitude,
+      branch_id: branch_id || req.body.branchId || req.body.idChiNhanhChon
     });
+
     if (phiShip.error) {
       return res.status(400).json({ message: phiShip.error });
     }
@@ -82,6 +113,9 @@ const datDonHang = async (req, res) => {
         message: `Địa chỉ giao hàng quá xa cửa hàng (${phiShip.distance_km} km). Chỉ giao trong bán kính ${phiShip.max_distance_km} km!`,
         ...phiShip,
       });
+    }
+    if (!phiShip.branch_id) {
+      return res.status(400).json({ message: 'Không xác định được chi nhánh giao hàng!' });
     }
 
     const orderItems = [];
@@ -111,7 +145,6 @@ const datDonHang = async (req, res) => {
       });
       products_subtotal += subtotal;
     }
-
     let discount_amount = 0;
     let validPromotion = null;
 
@@ -164,9 +197,10 @@ const datDonHang = async (req, res) => {
     const customer_name = delivery.customer_name?.trim() || user.full_name;
     const phone = delivery.phone?.trim() || user.phone || '';
 
-    const order = await Order.create({
+    let order = await Order.create({
       order_type: 'online',
       customer_id: user._id,
+      branch_id: phiShip.branch_id,
       items: orderItems,
       products_subtotal,
       shipping_fee,
@@ -200,18 +234,20 @@ const datDonHang = async (req, res) => {
       });
     }
 
+    order = await Order.findById(order._id).populate('branch_id', 'branch_name shop_address');
+
     return res.status(201).json({
       message: 'Đặt hàng thành công!',
       order,
     });
   } catch (error) {
-    return res.status(500).json({ message: 'Lỗi đặt hàng!', error: error.message });
+    return res.status(500).json({ message: error.message || 'Lỗi đặt hàng!', error: error.message });
   }
 };
 
-// =========================================================================
-// 💡 ĐÃ TÍCH HỢP: Lấy đơn hàng kèm trạng thái đánh giá chi tiết từng sản phẩm
-// =========================================================================
+/**
+ * 🌟 ĐÃ CẬP NHẬT HOÀN TOÀN: ĐỒNG BỘ POPULATE MẠNH MẼ CHO KHÁCH HÀNG
+ */
 const layDonHangCuaKhach = async (req, res) => {
   try {
     const { user_id } = req.query;
@@ -219,26 +255,26 @@ const layDonHangCuaKhach = async (req, res) => {
       return res.status(400).json({ message: 'Thiếu mã khách hàng!' });
     }
 
-    // 1. Lấy danh sách các đơn hàng thô từ CSDL
+    // 1. Sử dụng cú pháp chuỗi giúp Mongoose mapping chính xác tuyệt đối qua 'ref' của Schema
+    // Bỏ qua object cấu hình phức tạp để tránh lỗi khi đi kèm với `.lean()`
     const rawOrders = await Order.find({
       customer_id: user_id,
       order_type: 'online',
     })
+      .populate('branch_id', 'branch_name shop_address') 
       .sort({ createdAt: -1 })
       .lean();
 
-    // Thu thập tất cả các ID đơn hàng đã hoàn thành ('completed') để query Review 1 lần duy nhất
     const completedOrderIds = rawOrders
       .filter(o => o.status === 'completed')
       .map(o => o._id);
 
-    // 2. Truy vấn toàn bộ các đánh giá của user này thuộc nhóm đơn hàng trên
+    // 2. Truy vấn toàn bộ các đánh giá
     const reviews = await Review.find({
       user_id: user_id,
       order_id: { $in: completedOrderIds }
     }).lean();
 
-    // Tạo bản đồ Map dạng: "idĐơnHàng_idSảnPhẩm" -> Dữ liệu review để tìm kiếm siêu tốc O(1)
     const reviewMap = new Map();
     reviews.forEach(r => {
       if (r.order_id && r.product_id) {
@@ -247,16 +283,18 @@ const layDonHangCuaKhach = async (req, res) => {
       }
     });
 
-    // 3. Bản đồ tự dịch trạng thái giao diện
+    // 3. Bản đồ dịch trạng thái giao diện
     const statusMap = {
       pending: { label: 'Chờ duyệt', className: 'khdh-status-pending' },
       preparing: { label: 'Đang chuẩn bị', className: 'khdh-status-preparing' },
+      ready: { label: 'Món đã sẵn sàng', className: 'khdh-status-ready' },
       shipping: { label: 'Đang giao hàng', className: 'khdh-status-shipping' },
       completed: { label: 'Đã hoàn thành', className: 'khdh-status-completed' },
+      failed: { label: 'Thất bại', className: 'khdh-status-failed' },
       cancelled: { label: 'Đã hủy đơn', className: 'khdh-status-cancelled' },
     };
 
-    // 4. Tiến hành map dữ liệu trạng thái chữ và trạng thái đánh giá vào từng item
+    // 4. Gộp dữ liệu hoàn trả (Sử dụng vòng lặp map thường, bỏ async/await tra cứu thủ công)
     const orders = rawOrders.map((order) => {
       const currentConfig = statusMap[order.status] || {
         label: order.status, 
@@ -268,9 +306,9 @@ const layDonHangCuaKhach = async (req, res) => {
         status_label: statusMap[h.status]?.label || h.status,
       }));
 
-      // Nếu đơn hàng đã hoàn thành, thực hiện check chéo qua bản đồ reviewMap trên bộ nhớ RAM
+      let updatedItems = order.items || [];
       if (order.status === 'completed' && order.items) {
-        order.items = order.items.map(item => {
+        updatedItems = order.items.map(item => {
           if (item.product_id) {
             const searchKey = `${order._id.toString()}_${item.product_id.toString()}`;
             const matchedReview = reviewMap.get(searchKey);
@@ -286,7 +324,6 @@ const layDonHangCuaKhach = async (req, res) => {
               };
             }
           }
-          // Trạng thái mặc định nếu sản phẩm chưa được review
           return {
             ...item,
             is_reviewed: false,
@@ -295,13 +332,17 @@ const layDonHangCuaKhach = async (req, res) => {
         });
       }
 
+      // Đã ĐƯỢC DỌN SẠCH đoạn gán đè `finalBranch` bị lỗi logic trước đó.
+      // Cấu trúc `branch_id` lúc này sẽ giữ nguyên dữ liệu đã được nạp (Object) từ .populate() phía trên.
       return {
         ...order,
+        items: updatedItems,
         status_detail: currentConfig, 
         status_history: historyWithLabels
       };
     });
 
+    // Trả về danh sách đơn hàng cho Frontend
     return res.status(200).json({ orders });
   } catch (error) {
     return res.status(500).json({ message: 'Lỗi tải đơn hàng!', error: error.message });
@@ -358,4 +399,4 @@ const huyDonHang = async (req, res) => {
   }
 };
 
-module.exports = { layDonHangCuaKhach, huyDonHang, datDonHang, tinhPhiShip };
+module.exports = { layDonHangCuaKhach, huyDonHang, datDonHang, tinhPhiShip, getAllShippingConfigs };

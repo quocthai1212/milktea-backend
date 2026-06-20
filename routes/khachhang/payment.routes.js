@@ -34,9 +34,14 @@ async function resolveProductId(productId, productName) {
   return null;
 }
 
-async function buildOrderDraft({ user_id, items, delivery }) {
+async function buildOrderDraft({ user_id, branch_id, items, delivery, discount_amount }) { // 🌟 1. ĐÃ THÊM discount_amount vào tham số nhận vào
   if (!user_id) {
     const error = new Error('Thiếu mã khách hàng!');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!branch_id) {
+    const error = new Error('Vui lòng chọn chi nhánh phục vụ!');
     error.statusCode = 400;
     throw error;
   }
@@ -63,9 +68,20 @@ async function buildOrderDraft({ user_id, items, delivery }) {
     throw error;
   }
 
+  // Chuẩn hóa và làm sạch số điện thoại từ DB
+  let phone = user.phone || '';
+  phone = String(phone).replace(/[\s\+\-]/g, ''); 
+
+  if (!phone || phone.trim() === '' || phone.length < 10) {
+    const error = new Error('Tài khoản của bạn chưa cập nhật số điện thoại hợp lệ. Vui lòng bổ sung trong mục Hồ sơ để mua hàng!');
+    error.statusCode = 400;
+    throw error;
+  }
+
   const phiShip = await tinhPhiGiaoHang({
     latitude: delivery.latitude,
     longitude: delivery.longitude,
+    branch_id: branch_id,
   });
   if (phiShip.error) {
     const error = new Error(phiShip.error);
@@ -74,6 +90,11 @@ async function buildOrderDraft({ user_id, items, delivery }) {
   }
   if (!phiShip.within_range) {
     const error = new Error(`Địa chỉ giao hàng quá xa cửa hàng (${phiShip.distance_km} km). Chỉ giao trong bán kính ${phiShip.max_distance_km} km!`);
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!phiShip.branch_id) {
+    const error = new Error('Không xác định được chi nhánh giao hàng!');
     error.statusCode = 400;
     throw error;
   }
@@ -86,6 +107,9 @@ async function buildOrderDraft({ user_id, items, delivery }) {
     const final_unit_price = Number(item.final_unit_price ?? item.donGia ?? item.price) || 0;
     const subtotal = Number(item.subtotal ?? item.tongTien) || final_unit_price * quantity;
     const product_name = item.product_name || item.tenMon || item.name || 'Sản phẩm';
+    
+    // 🌟 ĐÃ XÓA dòng ép kiểu discount ở đây (sai vị trí scope)
+
     const selected_toppings = (item.selected_toppings || item.toppings || []).map((t) => ({
       topping_name: t.topping_name,
       price: Number(t.price) || 0,
@@ -107,27 +131,33 @@ async function buildOrderDraft({ user_id, items, delivery }) {
   }
 
   const shipping_fee = phiShip.shipping_fee;
-  const total_amount = products_subtotal + shipping_fee;
+  
+  // 🌟 2. ĐÃ CHUYỂN RA NGOÀI VÒNG LẶP: Ép kiểu chuẩn xác cho số tiền giảm giá
+  const discount = Number(discount_amount) || 0;
+
+  // 🌟 3. ĐÃ CẬP NHẬT: Tổng tiền = Tiền hàng + Ship - Giảm giá (Dùng Math.max để tránh tiền bị âm)
+  const total_amount = Math.max(0, products_subtotal + shipping_fee - discount);
+  
   const customer_name = delivery.customer_name?.trim() || user.full_name;
-  const phone = delivery.phone?.trim() || user.phone || '';
 
   return {
     orderData: {
       order_type: 'online',
       customer_id: user._id,
+      branch_id: phiShip.branch_id,
       items: orderItems,
       products_subtotal,
       shipping_fee,
       distance_km: phiShip.distance_km,
-      discount_amount: 0,
-      total_amount,
+      discount_amount: discount, // 🌟 Nhận giá trị chuẩn
+      total_amount,               // 🌟 Số tiền chính xác đã trừ giảm giá
       payment_method: 'PAYOS',
       payment_status: 'PENDING',
       cash_details: { customer_cash: 0, change_due: 0 },
       shipping_address: {
         address_detail: delivery.address_detail.trim(),
         customer_name,
-        phone,
+        phone: phone.trim(),
         latitude: Number(delivery.latitude) || 0,
         longitude: Number(delivery.longitude) || 0,
       },
@@ -146,13 +176,12 @@ async function buildOrderDraft({ user_id, items, delivery }) {
       price: item.final_unit_price,
     })),
     buyer: {
-      name: customer_name,
-      phone,
+      name: customer_name.normalize("NFD").replace(/[\u0300-\u036f]/g, ""),
+      phone: phone.trim(),
       email: user.email || '',
     },
   };
 }
-
 async function finalizePaidPayment(payment) {
   if (!payment) return null;
 
@@ -181,7 +210,20 @@ async function finalizePaidPayment(payment) {
   return order._id;
 }
 
-async function updatePaymentAndOrder({ orderCode, paymentLinkId, status, rawWebhookData }) {
+// ✔️ ĐÃ CẬP NHẬT: Hàm cắt bỏ các đoạn chuỗi thừa hệ thống ngân hàng (.CT tu...)
+function cleanBankDescription(desc) {
+  if (!desc) return null;
+
+  // Tìm vị trí của dấu chấm "." (nơi bắt đầu của phần đuôi thừa)
+  const dotIndex = desc.indexOf('.');
+  if (dotIndex !== -1) {
+    return desc.substring(0, dotIndex).trim();
+  }
+
+  return desc.trim();
+}
+
+async function updatePaymentAndOrder({ orderCode, paymentLinkId, status, rawWebhookData, apiData }) {
   const normalizedStatus = mapPayOSStatus(status);
   const payment = await Payment.findOne({
     $or: [
@@ -194,7 +236,33 @@ async function updatePaymentAndOrder({ orderCode, paymentLinkId, status, rawWebh
 
   payment.status = normalizedStatus;
   if (paymentLinkId) payment.payment_link_id = paymentLinkId;
-  if (rawWebhookData) payment.raw_webhook_data = rawWebhookData;
+
+  // 🌟 Hứng trọn dữ liệu đổ về từ Webhook (Môi trường Live/Test)
+  if (rawWebhookData && rawWebhookData.data) {
+    payment.raw_webhook_data = rawWebhookData;
+    const webhookData = rawWebhookData.data;
+    
+    payment.bank_account_name = webhookData.counterAccountName || payment.bank_account_name;
+    payment.bank_account_number = webhookData.counterAccountNumber || payment.bank_account_number; 
+    payment.bank_description = cleanBankDescription(webhookData.description) || payment.bank_description; // 🌟 ĐÃ CẬP NHẬT: Loại bỏ đuôi rác ngân hàng
+    payment.bank_amount_paid = Number(webhookData.amount) || payment.bank_amount_paid;
+    payment.bank_reference = webhookData.reference || payment.bank_reference;
+  }
+
+  // 🌟 Hứng dữ liệu dự phòng từ API Check Status cám biệt
+  if (apiData) {
+    payment.bank_amount_paid = Number(apiData.amountPaid) || payment.bank_amount_paid;
+    
+    // Nếu API có đính kèm lịch sử mảng giao dịch thanh toán
+    const transaction = apiData.transactions?.[0];
+    if (transaction) {
+      payment.bank_account_name = transaction.counterAccountName || transaction.accountName || payment.bank_account_name;
+      payment.bank_account_number = transaction.counterAccountNumber || payment.bank_account_number; 
+      payment.bank_description = cleanBankDescription(transaction.description) || payment.bank_description; // 🌟 ĐÃ CẬP NHẬT: Loại bỏ đuôi rác ngân hàng
+      payment.bank_reference = transaction.reference || payment.bank_reference;
+    }
+  }
+
   if (normalizedStatus === 'PAID' && !payment.paid_at) payment.paid_at = new Date();
   await payment.save();
 
@@ -261,7 +329,15 @@ async function createRetryPayment(oldPayment) {
   const userId = oldPayment.user_id || order?.customer_id || orderPayload?.customer_id;
   if (userId) {
     const user = await User.findById(userId).lean();
+    let cleanPhone = String(user?.phone || '').replace(/[\s\+\-]/g, '');
+    
+    if (!user || !cleanPhone || cleanPhone.trim() === '') {
+      const error = new Error('Tài khoản chưa cập nhật số điện thoại. Không thể tạo liên kết thanh toán!');
+      error.statusCode = 400;
+      throw error;
+    }
     buyerEmail = user?.email || '';
+    buyerPhone = cleanPhone.trim();
   }
 
   const orderCode = makeOrderCode(order?._id);
@@ -271,7 +347,7 @@ async function createRetryPayment(oldPayment) {
     amount,
     description: normalizeDescription(`MilkTea DH${String(orderCode).slice(-6)}`, orderCode),
     items: paymentItems,
-    buyerName,
+    buyerName: buyerName.normalize("NFD").replace(/[\u0300-\u036f]/g, ""),
     buyerPhone,
     buyerEmail,
     returnUrl: `${frontendUrl}/payos-return`,
@@ -299,6 +375,7 @@ async function createRetryPayment(oldPayment) {
     order.payment_status = 'PENDING';
     order.payos_order_code = orderCode;
     order.payos_payment_link_id = paymentLink.paymentLinkId;
+    if (order.shipping_address) order.shipping_address.phone = buyerPhone;
     await order.save();
   }
 
@@ -318,6 +395,7 @@ router.post('/payos/create', async (req, res) => {
       buyerPhone,
       buyerEmail,
       delivery,
+      discount_amount, // 🌟 1. ĐÃ BỔ SUNG: Nhặt lấy số tiền giảm từ req.body do Frontend gửi lên
     } = req.body;
 
     let order = null;
@@ -343,25 +421,51 @@ router.post('/payos/create', async (req, res) => {
         return res.status(403).json({ message: 'Bạn không có quyền thanh toán đơn hàng này!' });
       }
 
+      const customerId = order.customer_id || user_id;
+      const associatedUser = await User.findById(customerId);
+      let cleanPhone = String(associatedUser?.phone || '').replace(/[\s\+\-]/g, '');
+
+      if (!associatedUser || !cleanPhone || cleanPhone.trim() === '') {
+        return res.status(400).json({ message: 'Tài khoản chưa cập nhật số điện thoại để thanh toán đơn hàng này!' });
+      }
+
       paymentAmount = paymentAmount || Number(order.total_amount);
-      paymentItems = (items?.length ? items : order.items).slice(0, 10).map((item) => ({
-        name: String(item.name || item.product_name || 'MilkTea').slice(0, 50),
-        quantity: Math.max(1, Number(item.quantity) || 1),
-        price: Math.max(0, Number(item.price || item.final_unit_price || item.subtotal) || 0),
-      }));
+      
+      // 🌟 2. ĐÃ SỬA: Quy về 1 Item tổng của đơn hàng cũ để PayOS không bắt lỗi lệch tiền (Price * Qty)
+      paymentItems = [{
+        name: `Thanh toan don hang MilkTea #${order_id.toString().slice(-4)}`,
+        quantity: 1,
+        price: paymentAmount,
+      }];
+
       buyer = {
-        name: buyer.name || order.shipping_address?.customer_name || '',
-        phone: buyer.phone || order.shipping_address?.phone || '',
-        email: buyer.email,
+        name: (buyer.name || order.shipping_address?.customer_name || associatedUser.full_name).normalize("NFD").replace(/[\u0300-\u036f]/g, ""),
+        phone: cleanPhone.trim(),
+        email: buyer.email || associatedUser.email || '',
       };
     } else {
-      const draft = await buildOrderDraft({ user_id, items, delivery });
+      // 🌟 3. ĐÃ CẬP NHẬT: Truyền discount_amount vào hàm dựng đơn hàng tạm
+      const draft = await buildOrderDraft({ 
+        user_id, 
+        branch_id: req.body.branch_id, 
+        items, 
+        delivery, 
+        discount_amount: Number(discount_amount) || 0 // Ép kiểu số chuẩn chỉnh
+      });
+
       orderDraft = draft.orderData;
-      paymentAmount = orderDraft.total_amount;
-      paymentItems = draft.paymentItems;
+      paymentAmount = orderDraft.total_amount; // Lúc này total_amount đã được trừ discount chính xác!
+      
+      // 🌟 4. ĐÃ SỬA: Quy về 1 Item tổng cho đơn hàng mới để PayOS đối soát khớp 100% với paymentAmount
+      paymentItems = [{
+        name: `Thanh toan don hang MilkTea`,
+        quantity: 1,
+        price: paymentAmount, // Số tiền hiển thị thẳng trên hóa đơn QR PayOS (38.637đ)
+      }];
+
       buyer = {
-        name: buyer.name || draft.buyer.name,
-        phone: buyer.phone || draft.buyer.phone,
+        name: draft.buyer.name,
+        phone: draft.buyer.phone,
         email: buyer.email || draft.buyer.email,
       };
     }
@@ -446,6 +550,7 @@ router.get('/payos/status', async (req, res) => {
       orderCode: paymentLink.orderCode || orderCode,
       paymentLinkId: paymentLink.id || paymentLinkId,
       status: paymentLink.status,
+      apiData: paymentLink,
     });
 
     return res.status(200).json({
@@ -488,6 +593,7 @@ router.post('/payos/retry', async (req, res) => {
         orderCode: paymentLink.orderCode || oldPayment.order_code,
         paymentLinkId: paymentLink.id || oldPayment.payment_link_id,
         status: paymentLink.status,
+        apiData: paymentLink,
       });
     } catch (_) {}
 
@@ -531,7 +637,7 @@ router.post('/payos/webhook', async (req, res) => {
     return res.status(200).json({ success: true });
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
-  }
+  } 
 });
 
 module.exports = router;

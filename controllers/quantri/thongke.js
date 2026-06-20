@@ -1,6 +1,22 @@
 const Order = require('../../models/Order');
 const User = require('../../models/User');
 
+function taoBoLocKhoangNgay(tuNgay, denNgay) {
+  const createdAt = {};
+
+  if (tuNgay) {
+    const start = new Date(`${tuNgay}T00:00:00.000+07:00`);
+    if (!Number.isNaN(start.getTime())) createdAt.$gte = start;
+  }
+
+  if (denNgay) {
+    const end = new Date(`${denNgay}T23:59:59.999+07:00`);
+    if (!Number.isNaN(end.getTime())) createdAt.$lte = end;
+  }
+
+  return Object.keys(createdAt).length ? { createdAt } : {};  
+}
+
 /**
  * 1. THỐNG KÊ THEO TÀI KHOẢN KHÁCH HÀNG
  * Tối ưu: Thống kê cả số đơn thành công và số đơn bom (giao thất bại) của từng khách
@@ -135,9 +151,13 @@ exports.thongKeTheoMatHang = async (req, res) => {
  */
 exports.thongKeTheoThoiGian = async (req, res) => {
   try {
-    const { kieu } = req.query; 
+    const { kieu, tuNgay, denNgay } = req.query; 
     let groupStage = {};
     const TZ = "Asia/Ho_Chi_Minh";
+    const matchStage = {
+      status: { $in: ['completed', 'failed'] },
+      ...taoBoLocKhoangNgay(tuNgay, denNgay)
+    };
 
     if (kieu === 'quy') {
       groupStage = {
@@ -181,7 +201,7 @@ exports.thongKeTheoThoiGian = async (req, res) => {
     };
 
     const rawData = await Order.aggregate([
-      { $match: { status: { $in: ['completed', 'failed'] } } },
+      { $match: matchStage },
       { $group: groupStage },
       { $sort: { '_id.nam': -1, '_id.thang': -1, '_id.quy': -1 } }
     ]);
@@ -209,12 +229,37 @@ exports.thongKeTheoThoiGian = async (req, res) => {
 };
 
 /**
+ * 3.1 TỔNG DOANH THU TÍCH LŨY (KHÔNG BỊ ẢNH HƯỞNG BỞI BỘ LỌC NGÀY)
+ * Trả về tổng doanh thu thực tế chỉ tính trên các đơn có trạng thái 'completed'.
+ */
+exports.tongDoanhThuLuyKe = async (req, res) => {
+  try {
+    const result = await Order.aggregate([
+      { $match: { status: 'completed' } },
+      {
+        $group: {
+          _id: null,
+          tong: { $sum: { $ifNull: ['$total_amount', 0] } }
+        }
+      }
+    ]);
+
+    const tong = (result && result[0] && result[0].tong) || 0;
+
+    return res.status(200).json({ success: true, data: { tongDoanhThuLuyKe: tong } });
+  } catch (error) {
+    console.error('Lỗi lấy tổng doanh thu lũy kế:', error);
+    return res.status(500).json({ success: false, message: 'Không thể lấy tổng doanh thu lũy kế.' });
+  }
+};
+
+/**
  * 4. LẤY CHI TIẾT ĐƠN HÀNG PHỤC VỤ DRILL-DOWN (MODAL)
  * Tối ưu: Cho phép truy xuất danh sách bao gồm cả đơn thất bại để đối soát lý do hủy đơn
  */
 exports.getChiTietThongKe = async (req, res) => {
   try {
-    const { tab, id, kieuThoiGian, statusFilter } = req.query; 
+    const { tab, id, kieuThoiGian, statusFilter, tuNgay, denNgay } = req.query; 
     // statusFilter: 'all' (mặc định), 'completed', 'failed'
 
     // Khởi tạo bộ lọc trạng thái linh hoạt phục vụ việc xem danh sách đơn hủy trong modal
@@ -226,6 +271,8 @@ exports.getChiTietThongKe = async (req, res) => {
     } else {
       matchStage.status = { $in: ['completed', 'failed'] };
     }
+
+    Object.assign(matchStage, taoBoLocKhoangNgay(tuNgay, denNgay));
 
     const TZ = "Asia/Ho_Chi_Minh";
 

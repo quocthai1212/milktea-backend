@@ -12,27 +12,29 @@ const User = require('./models/User');
 const Role = require('./models/Role');
 
 var indexRouter = require('./routes/index');
-var dangkyRouter = require('./routes/khachhang/dang_ky');
-var dangnhapRouter = require('./routes/dang_nhap');
+
 var qt_nhanvienRouter = require('./routes/quantri/nhanvien');
 var qt_sanphamRouter = require('./routes/quantri/sanpham');
-var paymentRouter = require('./routes/khachhang/payment.routes');
-var kh_trangchuRouter = require('./routes/khachhang/khachhang');
-var kh_khuyenmaiRouter = require('./routes/khachhang/khuyenmai');
-
 var thongkeRouter = require('./routes/quantri/thongke');
 var danhmucRouter = require('./routes/quantri/danhmuc');
 var qt_khuyenmaiRouter = require('./routes/quantri/khuyenmai');
+var qt_donhangRouter = require('./routes/quantri/donhang');
+var qt_khachhangRouter = require('./routes/quantri/khachhang');
+var qt_binhluanRouter = require('./routes/quantri/binhluan');
+var qt_chinhanhRouter = require('./routes/quantri/chinhanh');
 
-// 💡 THÊM ROUTER SHIPPER TẠI ĐÂY
-var shipperRouter = require('./routes/quantri/shipper');
+
+var nhanvienDonHangRouter = require('./routes/nhanvien/load_danhsach');
+
+var dangkyRouter = require('./routes/khachhang/dang_ky');
+var dangnhapRouter = require('./routes/dang_nhap');
+var paymentRouter = require('./routes/khachhang/payment.routes');
+var kh_trangchuRouter = require('./routes/khachhang/khachhang');
+var kh_khuyenmaiRouter = require('./routes/khachhang/khuyenmai');
+var kh_quenmkRouter = require('./routes/khachhang/quenmk');
+
 var shipperDonHangRouter = require('./routes/shipper/don_hang');
 
-// 🆕 THÊM ROUTER QUẢN LÝ ĐƠN HÀNG (CỦA ADMIN) TẠI ĐÂY
-var qt_donhangRouter = require('./routes/quantri/donhang');
-
-// 🆕 THÊM ROUTER CHO NHÂN VIÊN XỬ LÝ ĐƠN HÀNG TẠI ĐÂY
-var nhanvienDonHangRouter = require('./routes/nhanvien/load_danhsach');
 
 var app = express();
 
@@ -47,26 +49,29 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.use('/api/auth', dangnhapRouter);
 app.use('/api/auth', dangkyRouter);
+
 app.use('/api/quantri/qt_nhanvien', qt_nhanvienRouter);
 app.use('/api/quantri/qt_sanpham', qt_sanphamRouter);
-app.use('/api/payments', paymentRouter);
-app.use('/api/khachhang', kh_trangchuRouter);
 app.use('/api/quantri/thongke', thongkeRouter);
-app.use('/api/quantri/danhmuc', danhmucRouter);
-app.use('/api/quantri/qt_khuyenmai', qt_khuyenmaiRouter);
-app.use('/api/khachhang/khuyenmai', kh_khuyenmaiRouter);
-
-// 💡 ĐĂNG KÝ ĐƯỜNG DẪN API DÀNH RIÊNG CHO SHIPPER
-app.use('/api/quantri/qt_shipper', shipperRouter);
-app.use('/api/shipper', shipperDonHangRouter);
-
-// 🆕 ĐĂNG KÝ ĐƯỜNG DẪN API QUẢN LÝ ĐƠN HÀNG CHO ADMIN
+app.use('/api/quantri/danhmucsanpham', danhmucRouter);
 app.use('/api/quantri/donhang', qt_donhangRouter);
+app.use('/api/quantri/qt_khuyenmai', qt_khuyenmaiRouter);
+app.use('/api/quantri/qt_khachhang', qt_khachhangRouter);
+app.use('/api/quantri/qt_binhluan', qt_binhluanRouter);
+app.use('/api/quantri/qt_chinhanh', qt_chinhanhRouter);
 
-// 🆕 ĐĂNG KÝ ĐƯỜNG DẪN API CHO NHÂN VIÊN QUẦY
-// Frontend sẽ gọi URL: http://localhost:5000/api/nhanvien/don-hang
+
 app.use('/api/nhanvien', nhanvienDonHangRouter);
 
+app.use('/api/payments', paymentRouter);
+app.use('/api/khachhang/khuyenmai', kh_khuyenmaiRouter);
+app.use('/api/khachhang', kh_trangchuRouter);
+app.use('/api/khachhang/quenmk', kh_quenmkRouter);
+
+
+app.use('/api/shipper', shipperDonHangRouter);
+
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/', indexRouter);
 
 // ĐOẠN KẾT NỐI DATABASE PHẢI ĐỂ Ở ĐÁY FILE (NGAY TRÊN MODULE.EXPORTS)

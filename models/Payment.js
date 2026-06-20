@@ -12,6 +12,14 @@ const PaymentSchema = new mongoose.Schema({
     default: 'PENDING',
     index: true,
   },
+
+  // 🔴 CÁC TRƯỜNG CẬP NHẬT THÊM ĐỂ LƯU THÔNG TIN CHUYỂN KHOẢN THỰC TẾ
+  bank_account_name: { type: String, default: null }, // Tên chủ tài khoản người chuyển
+  bank_account_number: { type: String, default: null }, // 🌟 THÊM MỚI: Số tài khoản người chuyển (Ví dụ: 1903xxxx)
+  bank_description: { type: String, default: null },  // Nội dung chuyển khoản thực tế hiển thị trên sao kê
+  bank_amount_paid: { type: Number, default: 0 },     // Số tiền thực tế ngân hàng ghi nhận được
+  bank_reference: { type: String, default: null },    // Mã tham chiếu/Mã giao dịch ngân hàng
+
   payment_link_id: { type: String, default: null, index: true },
   checkout_url: { type: String, default: null },
   qr_code: { type: String, default: null },

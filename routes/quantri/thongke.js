@@ -8,4 +8,5 @@ router.get('/khachhang', thongKeController.thongKeTheoKhachHang);
 router.get('/mathang', thongKeController.thongKeTheoMatHang);
 router.get('/thoigian', thongKeController.thongKeTheoThoiGian);
 router.get('/chitiet', thongKeController.getChiTietThongKe);
+router.get('/tongluyke', thongKeController.tongDoanhThuLuyKe);
 module.exports = router;

@@ -11,10 +11,19 @@ const layTatCaPromotions = async (req, res) => {
   }
 };
 
-// 2. Tạo mới một mã giảm giá
+// 2. Tạo mới một mã giảm giá (Đã đồng bộ loại hình mã: public / collectible)
 const taoMoiPromotion = async (req, res) => {
   try {
-    const { code, description, discount_value, start_date, end_date, is_active, usage_limit } = req.body;
+    const { 
+      code, 
+      description, 
+      discount_value, 
+      start_date, 
+      end_date, 
+      is_active, 
+      usage_limit,
+      promotion_type // 🌟 Nhận thêm trường phân loại từ Client gửi lên
+    } = req.body;
 
     if (!code || !discount_value || !start_date || !end_date) {
       return res.status(400).json({ success: false, message: "Vui lòng nhập đầy đủ các trường bắt buộc!" });
@@ -32,8 +41,15 @@ const taoMoiPromotion = async (req, res) => {
       discount_value: Number(discount_value),
       start_date: new Date(start_date),
       end_date: new Date(end_date),
-      is_active: is_active !== undefined ? is_active : true,
-      usage_limit: usage_limit ? Number(usage_limit) : null
+      is_active: is_active !== undefined ? (is_active === 'true' || is_active === true) : true,
+      usage_limit: usage_limit && usage_limit !== "" ? Number(usage_limit) : null,
+      
+      // 🌟 Lưu loại mã: Nếu không truyền lên sẽ mặc định là 'public' (công khai)
+      promotion_type: promotion_type || 'public', 
+      
+      // Khởi tạo các giá trị mặc định ban đầu bằng 0
+      claimed_count: 0, 
+      used_count: 0      
     });
 
     await maMoi.save();
@@ -47,7 +63,18 @@ const taoMoiPromotion = async (req, res) => {
 const capNhatPromotion = async (req, res) => {
   try {
     const { id } = req.params;
-    const { description, discount_value, start_date, end_date, is_active, usage_limit } = req.body;
+    const { 
+      description, 
+      discount_value, 
+      start_date, 
+      end_date, 
+      is_active, 
+      usage_limit,
+      promotion_type // 🌟 Nhận thêm trường phân loại để cập nhật khi cần
+    } = req.body;
+
+    // Chuyển đổi trạng thái active về Boolean chuẩn xác
+    const chuanHoaIsActive = is_active !== undefined ? (is_active === 'true' || is_active === true) : true;
 
     const maCapNhat = await Promotion.findByIdAndUpdate(
       id,
@@ -56,8 +83,12 @@ const capNhatPromotion = async (req, res) => {
         discount_value: Number(discount_value),
         start_date: new Date(start_date),
         end_date: new Date(end_date),
-        is_active,
-        usage_limit: usage_limit ? Number(usage_limit) : null
+        is_active: chuanHoaIsActive,
+        usage_limit: usage_limit && usage_limit !== "" ? Number(usage_limit) : null,
+        
+        // 🌟 Cập nhật hình thức áp dụng mã
+        promotion_type: promotion_type || 'public'
+        // Giữ nguyên các giá trị thống kê claimed_count và used_count hiện tại
       },
       { new: true }
     );
