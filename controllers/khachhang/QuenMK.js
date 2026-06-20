@@ -11,7 +11,6 @@ const transporter = nodemailer.createTransport({
     host: 'smtp.gmail.com',
     port: 465,
     secure: true, 
-    localAddress: '0.0.0.0', // 🔥 Dòng này cứu mạng Server khỏi lỗi sập mạng IPv6 trên Render
     auth: {
         user: 'duonghoangquocthai000@gmail.com', 
         pass: 'dzaq kcqf ijfv kyir'       
