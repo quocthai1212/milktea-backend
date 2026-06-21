@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Order = require('../../models/Order');
 const User = require('../../models/User');
 
@@ -19,38 +20,29 @@ function taoBoLocKhoangNgay(tuNgay, denNgay) {
 
 /**
  * 1. THỐNG KÊ THEO TÀI KHOẢN KHÁCH HÀNG
- * Tối ưu: Thống kê cả số đơn thành công và số đơn bom (giao thất bại) của từng khách
  */
 exports.thongKeTheoKhachHang = async (req, res) => {
   try {
+    const { tuNgay, denNgay } = req.query;
+    const matchStage = { 
+      status: { $in: ['completed', 'failed'] }, 
+      customer_id: { $ne: null },
+      ...taoBoLocKhoangNgay(tuNgay, denNgay)
+    };
+
     const data = await Order.aggregate([
-      // Lọc các đơn đã hoàn thành HOẶC giao thất bại, loại bỏ đơn không có ID khách
-      { 
-        $match: { 
-          status: { $in: ['completed', 'failed'] }, 
-          customer_id: { $ne: null } 
-        } 
-      },
-      
+      { $match: matchStage },
       {
         $group: {
           _id: '$customer_id',
           tongSoDonHang: { $sum: 1 },
-          // Đếm đơn thành công
-          donThanhCong: {
-            $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
-          },
-          // Đếm đơn giao thất bại (Bom hàng)
-          donThatBai: {
-            $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] }
-          },
-          // Tiền chi tiêu chỉ tính trên đơn đã completed thành công
+          donThanhCong: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+          donThatBai: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
           tongTienChiTieu: {
             $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$total_amount', 0] }
           }
         }
       },
-      
       {
         $lookup: {
           from: 'users',
@@ -59,9 +51,7 @@ exports.thongKeTheoKhachHang = async (req, res) => {
           as: 'khachHangInfo'
         }
       },
-      
       { $unwind: { path: '$khachHangInfo', preserveNullAndEmptyArrays: true } },
-      
       {
         $project: {
           _id: 1,
@@ -74,7 +64,6 @@ exports.thongKeTheoKhachHang = async (req, res) => {
           phone: { $ifNull: ['$khachHangInfo.phone', 'N/A'] }
         }
       },
-      
       { $sort: { tongTienChiTieu: -1 } }
     ]);
 
@@ -87,33 +76,27 @@ exports.thongKeTheoKhachHang = async (req, res) => {
 
 /**
  * 2. THỐNG KÊ THEO MẶT HÀNG (SẢN PHẨM)
- * Tối ưu: Đo lường số lượng bán được và số lượng bị hoàn trả do giao hàng thất bại
  */
 exports.thongKeTheoMatHang = async (req, res) => {
   try {
+    const { tuNgay, denNgay } = req.query;
+    const matchStage = {
+      status: { $in: ['completed', 'failed'] },
+      ...taoBoLocKhoangNgay(tuNgay, denNgay)
+    };
+
     const data = await Order.aggregate([
-      { $match: { status: { $in: ['completed', 'failed'] } } },
+      { $match: matchStage },
       { $unwind: '$items' },
-      
       {
         $group: {
           _id: '$items.product_id',
           tenSanPham: { $first: '$items.product_name' },
-          // Tổng số lượng nằm trong các đơn giao thành công
-          tongSoLuongBan: {
-            $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$items.quantity', 0] }
-          },
-          // Tổng số lượng nằm trong các đơn bị hoàn trả / bom
-          soLuongBiHoan: {
-            $sum: { $cond: [{ $eq: ['$status', 'failed'] }, '$items.quantity', 0] }
-          },
-          // Doanh thu thực tế (chỉ tính trên đơn thành công)
-          tongDoanhThuMon: {
-            $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$items.subtotal', 0] }
-          }
+          tongSoLuongBan: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$items.quantity', 0] } },
+          soLuongBiHoan: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, '$items.quantity', 0] } },
+          tongDoanhThuMon: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$items.subtotal', 0] } }
         }
       },
-
       {
         $lookup: {
           from: 'products',
@@ -123,7 +106,6 @@ exports.thongKeTheoMatHang = async (req, res) => {
         }
       },
       { $unwind: { path: '$sanPhamInfo', preserveNullAndEmptyArrays: true } },
-
       {
         $project: {
           _id: 1,
@@ -134,7 +116,6 @@ exports.thongKeTheoMatHang = async (req, res) => {
           image_url: { $ifNull: ['$sanPhamInfo.image_url', ''] }
         }
       },
-      
       { $sort: { tongSoLuongBan: -1 } }
     ]);
 
@@ -147,7 +128,6 @@ exports.thongKeTheoMatHang = async (req, res) => {
 
 /**
  * 3. THỐNG KÊ DOANH THU THEO THÁNG / QUÝ / NĂM
- * Tối ưu: Bổ sung đếm số đơn hàng thất bại để Frontend tính toán tỷ lệ hủy đơn (Cancel Rate)
  */
 exports.thongKeTheoThoiGian = async (req, res) => {
   try {
@@ -179,26 +159,11 @@ exports.thongKeTheoThoiGian = async (req, res) => {
       };
     }
 
-    // Đếm tổng số hóa đơn được tạo ra (gồm cả thành công và thất bại)
     groupStage.tongDonHang = { $sum: 1 };
-    
-    // Đếm số đơn giao thành công
-    groupStage.donThanhCong = {
-      $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
-    };
-
-    // Đếm số đơn giao thất bại
-    groupStage.donThatBai = {
-      $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] }
-    };
-
-    // Tài chính: Chỉ cộng dồn tiền từ những đơn có trạng thái 'completed'
-    groupStage.doanhThu = {
-      $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$total_amount', 0] }
-    };
-    groupStage.tongTienGiaoHang = {
-      $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$shipping_fee', 0] }
-    };
+    groupStage.donThanhCong = { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } };
+    groupStage.donThatBai = { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } };
+    groupStage.doanhThu = { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$total_amount', 0] } };
+    groupStage.tongTienGiaoHang = { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$shipping_fee', 0] } };
 
     const rawData = await Order.aggregate([
       { $match: matchStage },
@@ -229,8 +194,7 @@ exports.thongKeTheoThoiGian = async (req, res) => {
 };
 
 /**
- * 3.1 TỔNG DOANH THU TÍCH LŨY (KHÔNG BỊ ẢNH HƯỞNG BỞI BỘ LỌC NGÀY)
- * Trả về tổng doanh thu thực tế chỉ tính trên các đơn có trạng thái 'completed'.
+ * 3.1 TỔNG DOANH THU TÍCH LŨY
  */
 exports.tongDoanhThuLuyKe = async (req, res) => {
   try {
@@ -245,7 +209,6 @@ exports.tongDoanhThuLuyKe = async (req, res) => {
     ]);
 
     const tong = (result && result[0] && result[0].tong) || 0;
-
     return res.status(200).json({ success: true, data: { tongDoanhThuLuyKe: tong } });
   } catch (error) {
     console.error('Lỗi lấy tổng doanh thu lũy kế:', error);
@@ -254,15 +217,13 @@ exports.tongDoanhThuLuyKe = async (req, res) => {
 };
 
 /**
- * 4. LẤY CHI TIẾT ĐƠN HÀNG PHỤC VỤ DRILL-DOWN (MODAL)
- * Tối ưu: Cho phép truy xuất danh sách bao gồm cả đơn thất bại để đối soát lý do hủy đơn
+ * 4. LẤY CHI TIẾT ĐƠN HÀNG PHỤC VỤ DRILL-DOWN (MODAL) - SỬA LỖI TỔNG TIỀN BẰNG 0 🌟
  */
 exports.getChiTietThongKe = async (req, res) => {
   try {
     const { tab, id, kieuThoiGian, statusFilter, tuNgay, denNgay } = req.query; 
-    // statusFilter: 'all' (mặc định), 'completed', 'failed'
 
-    // Khởi tạo bộ lọc trạng thái linh hoạt phục vụ việc xem danh sách đơn hủy trong modal
+    // 1. Khởi tạo bộ lọc trạng thái cơ bản
     let matchStage = {};
     if (statusFilter === 'completed') {
       matchStage.status = 'completed';
@@ -272,16 +233,16 @@ exports.getChiTietThongKe = async (req, res) => {
       matchStage.status = { $in: ['completed', 'failed'] };
     }
 
+    // Đồng bộ khoảng ngày từ bộ lọc chính
     Object.assign(matchStage, taoBoLocKhoangNgay(tuNgay, denNgay));
 
     const TZ = "Asia/Ho_Chi_Minh";
 
+    // 2. Định dạng các điều kiện lọc dựa trên Tab đang active
     if (tab === 'khachhang') {
-      const mongoose = require('mongoose');
       matchStage.customer_id = new mongoose.Types.ObjectId(id);
     } 
     else if (tab === 'mathang') {
-      const mongoose = require('mongoose');
       matchStage['items.product_id'] = new mongoose.Types.ObjectId(id);
     } 
     else if (tab === 'thoigian') {
@@ -315,11 +276,70 @@ exports.getChiTietThongKe = async (req, res) => {
       }
     }
 
-    // Thực hiện truy vấn dữ liệu chi tiết kèm thông tin đối tác giao nhận hoặc lý do hủy đơn nếu có
-    const danhSachDonHang = await Order.find(matchStage)
-      .populate('customer_id', 'full_name email phone')
-      .populate('shipper_id', 'full_name phone') // Bổ sung thông tin shipper để xem ai đi giao bị bom
-      .sort({ createdAt: -1 });
+    let danhSachDonHang = [];
+
+    // 3. Thực hiện tách biệt logic truy vấn cho Tab Mặt Hàng
+    if (tab === 'mathang') {
+      const targetProductId = new mongoose.Types.ObjectId(id);
+
+      danhSachDonHang = await Order.aggregate([
+        { $match: matchStage },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'customer_id',
+            foreignField: '_id',
+            as: 'customer_id'
+          }
+        },
+        { $unwind: { path: '$customer_id', preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'shipper_id',
+            foreignField: '_id',
+            as: 'shipper_id'
+          }
+        },
+        { $unwind: { path: '$shipper_id', preserveNullAndEmptyArrays: true } },
+        { $sort: { createdAt: -1 } },
+        {
+          $addFields: {
+            // SỬA LỖI GIÁ TRỊ: Tính toán riêng tổng tiền của mặt hàng được nhấp chuột để tránh bị nhận giá trị 0
+            target_item_subtotal: {
+              $sum: {
+                $map: {
+                  input: {
+                    $filter: {
+                      input: "$items",
+                      as: "item",
+                      cond: { $eq: ["$$item.product_id", targetProductId] }
+                    }
+                  },
+                  as: "filtered_item",
+                  in: "$$filtered_item.subtotal"
+                }
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            "customer_id.password": 0,
+            "customer_id.role_id": 0,
+            "shipper_id.password": 0,
+            "shipper_id.role_id": 0,
+          }
+        }
+      ]);
+    } else {
+      // Các tab Khách Hàng và Thời Gian chạy lệnh tìm kiếm cơ bản rất nhanh và chuẩn xác
+      danhSachDonHang = await Order.find(matchStage)
+        .populate('customer_id', 'full_name email phone')
+        .populate('shipper_id', 'full_name phone')
+        .sort({ createdAt: -1 })
+        .lean();
+    }
 
     return res.status(200).json({ success: true, data: danhSachDonHang });
   } catch (error) {
