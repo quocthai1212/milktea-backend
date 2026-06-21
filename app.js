@@ -96,7 +96,7 @@ mongoose.connect(process.env.MONGODB_URI)
         // 2. TỰ ĐỘNG TẠO TÀI KHOẢN QUẢN TRỊ (ADMIN)
         const adminExist = await User.findOne({ email: 'admin@system.com' }); 
         if (!adminExist) {
-            const hashedAdminPassword = await bcrypt.hash('admin123', 10);
+            const hashedAdminPassword = await bcrypt.hash('Admin@123', 10);
             await User.create({
                 email: 'admin@system.com',
                 password: hashedAdminPassword,
