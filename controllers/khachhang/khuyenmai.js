@@ -4,36 +4,44 @@ const UserPromotion = require('../../models/UserPromotion');
 /**
  * @desc    Lấy tất cả voucher đang chạy để hiển thị ở trang Khuyến Mãi
  * @route   GET /api/khachhang/khuyenmai/all
- * @access  Public (TRUYỀN ID TRỰC TIẾP QUA QUERY NẾU CÓ)
+ * @access  Public
  */
 exports.getAllPromotions = async (req, res) => {
   try {
     const ngayHienTai = new Date();
 
-    // Tìm các mã đang active và nằm trong thời gian cho phép
+    // SỬA: Chỉ lấy các mã CÒN SỐ LƯỢNG (claimed_count < usage_limit)
     const promotions = await Promotion.find({
       is_active: true,
       end_date: { $gte: ngayHienTai },
-      start_date: { $lte: ngayHienTai }
-    }).sort({ createdAt: -1 }).lean(); // Thêm .lean() để tăng tốc độ truy vấn tối đa
+      start_date: { $lte: ngayHienTai },
+      $or: [
+        { usage_limit: null }, 
+        { $expr: { $lt: ["$claimed_count", "$usage_limit"] } } 
+      ]
+    }).sort({ createdAt: -1 }).lean();
 
     let claimedIds = [];
+    let usedIds = [];
     
-    // Đã đồng bộ bắt cả camelCase lẫn snake_case từ Frontend gửi lên
     const userId = req.query.user_id || req.query.userId;
     
     if (userId) {
-      const userWallets = await UserPromotion.find({ 
-        user_id: userId 
-      }).select('promotion_id').lean();
-      
-      claimedIds = userWallets.map(item => item.promotion_id.toString());
+      const userWallets = await UserPromotion.find({ user_id: userId }).select('promotion_id status').lean();
+      userWallets.forEach(item => {
+        if (item.status === 'used') {
+          usedIds.push(item.promotion_id.toString());
+        } else {
+          claimedIds.push(item.promotion_id.toString());
+        }
+      });
     }
 
     return res.status(200).json({
       success: true,
       data: promotions,
-      claimedIds: claimedIds // Trả về danh sách ID đã lưu để FE đổi trạng thái nút
+      claimedIds: claimedIds,
+      usedIds: usedIds
     });
   } catch (error) {
     console.error("Lỗi getAllPromotions:", error);
@@ -44,50 +52,51 @@ exports.getAllPromotions = async (req, res) => {
 /**
  * @desc    Khách hàng bấm nhận mã giảm giá (Collectible) lưu vào ví
  * @route   POST /api/khachhang/khuyenmai/claim
- * @access  Public (TRUYỀN ID TRỰC TIẾP QUA BODY)
+ * @access  Public
  */
 exports.claimPromotion = async (req, res) => {
   try {
     const { promotion_id, user_id, userId: alternativeUserId } = req.body; 
-    const userId = user_id || alternativeUserId; // Đề phòng Frontend truyền nhầm biến camelCase ở body
+    const userId = user_id || alternativeUserId;
 
-    if (!userId) {
-      return res.status(400).json({ success: false, message: "Thiếu thông tin ID người dùng (user_id)!" });
+    if (!userId || !promotion_id) {
+      return res.status(400).json({ success: false, message: "Thiếu thông tin người dùng hoặc mã giảm giá!" });
     }
 
-    if (!promotion_id) {
-      return res.status(400).json({ success: false, message: "Thiếu ID mã giảm giá!" });
+    // 1. Kiểm tra tài khoản đã từng nhận hoặc dùng chưa
+    const daTuongTac = await UserPromotion.findOne({ user_id: userId, promotion_id: promotion_id });
+    if (daTuongTac) {
+      return res.status(400).json({ 
+        success: false, 
+        message: daTuongTac.status === 'used' ? "Bạn đã dùng mã này rồi!" : "Mã này đã có trong ví của bạn!" 
+      });
     }
 
-    // 1. Tìm thông tin voucher
-    const promotion = await Promotion.findById(promotion_id);
-    if (!promotion) {
-      return res.status(404).json({ success: false, message: "Không tìm thấy chương trình giảm giá này!" });
-    }
-
-    // 2. Phải là loại collectible mới cho bấm nhận
-    if (promotion.promotion_type !== 'collectible') {
-      return res.status(400).json({ success: false, message: "Mã này áp dụng tự động, không cần lưu vào ví!" });
-    }
-
-    // 3. Check thời gian và trạng thái kích hoạt
     const ngayHienTai = new Date();
-    if (!promotion.is_active || promotion.end_date < ngayHienTai || promotion.start_date > ngayHienTai) {
-      return res.status(400).json({ success: false, message: "Mã giảm giá đã hết hạn sử dụng hoặc chưa được mở!" });
+
+    // SỬA: Trừ số lượng AN TOÀN bằng câu lệnh Atomic của MongoDB. 
+    // Vừa kiểm tra điều kiện còn số lượng, vừa cộng trực tiếp dưới DB. Chống trùng lặp tuyệt đối.
+    const promotion = await Promotion.findOneAndUpdate(
+      {
+        _id: promotion_id,
+        promotion_type: 'collectible',
+        is_active: true,
+        start_date: { $lte: ngayHienTai },
+        end_date: { $gte: ngayHienTai },
+        $or: [
+          { usage_limit: null },
+          { $expr: { $lt: ["$claimed_count", "$usage_limit"] } }
+        ]
+      },
+      { $inc: { claimed_count: 1 } }, // Tự động cộng số lượng hệ thống lên 1
+      { new: true }
+    );
+
+    if (!promotion) {
+      return res.status(400).json({ success: false, message: "Mã giảm giá đã hết lượt nhận hoặc đã hết hạn!" });
     }
 
-    // 4. Check số lượng phát hành tối đa (usage_limit) nếu có đặt
-    if (promotion.usage_limit !== null && promotion.claimed_count >= promotion.usage_limit) {
-      return res.status(400).json({ success: false, message: "Mã giảm giá này đã được thu thập hết!" });
-    }
-
-    // 5. Kiểm tra khách hàng đã nhận mã này trước đó chưa
-    const daNhanChua = await UserPromotion.findOne({ user_id: userId, promotion_id: promotion._id });
-    if (daNhanChua) {
-      return res.status(400).json({ success: false, message: "Bạn đã sở hữu mã giảm giá này trong ví rồi!" });
-    }
-
-    // 6. TIẾN HÀNH LƯU VÀO VÍ VÀ CẬP NHẬT BIẾN ĐẾM
+    // 2. Tiến hành lưu vào ví của User
     const viMoi = new UserPromotion({
       user_id: userId,
       promotion_id: promotion._id,
@@ -95,17 +104,11 @@ exports.claimPromotion = async (req, res) => {
     });
     await viMoi.save();
 
-    promotion.claimed_count += 1;
-    await promotion.save();
-
-    return res.status(200).json({
-      success: true,
-      message: "Nhận mã giảm giá thành công! Bạn có thể sử dụng khi mua hàng."
-    });
+    return res.status(200).json({ success: true, message: "Nhận mã giảm giá thành công!" });
 
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(400).json({ success: false, message: "Bạn đã nhận mã này rồi!" });
+      return res.status(400).json({ success: false, message: "Bạn đã sở hữu mã này rồi!" });
     }
     console.error("Lỗi claimPromotion:", error);
     return res.status(500).json({ success: false, message: "Lỗi xử lý server!" });
@@ -115,61 +118,60 @@ exports.claimPromotion = async (req, res) => {
 /**
  * @desc    Lấy danh sách mã khả dụng hiển thị lúc Thanh toán đơn hàng (Gồm Public + Collectible đã lưu)
  * @route   GET /api/khachhang/khuyenmai/checkout-vouchers
- * @access  Public (TRUYỀN ID TRỰC TIẾP QUA URL QUERY)
+ * @access  Public
  */
 exports.getCheckoutVouchers = async (req, res) => {
   try {
     const ngayHienTai = new Date();
-    
     const userId = req.query.user_id || req.query.userId;
     
     if (!userId) {
       return res.status(400).json({ success: false, message: "Không tìm thấy tham số dữ liệu user_id!" });
     }
 
-    // 1. Tìm các mã PUBLIC đang hoạt động tốt (Áp dụng tự động)
+    // Tìm danh sách mã tài khoản này đã sử dụng để loại bỏ
+    const userPromotions = await UserPromotion.find({ user_id: userId }).lean();
+    const usedPromoIds = userPromotions
+      .filter(item => item.status === 'used')
+      .map(item => item.promotion_id.toString());
+
+    // SỬA 1: Đối với mã PUBLIC, chỉ lấy những mã CÒN SỐ LƯỢNG (claimed_count < usage_limit)
     const publicVouchers = await Promotion.find({
+      _id: { $nin: usedPromoIds }, 
       promotion_type: 'public',
       is_active: true,
       end_date: { $gte: ngayHienTai },
-      start_date: { $lte: ngayHienTai }
+      start_date: { $lte: ngayHienTai },
+      $or: [
+        { usage_limit: null },
+        { $expr: { $lt: ["$claimed_count", "$usage_limit"] } }
+      ]
     }).lean();
 
-    // 2. Tìm các mã COLLECTIBLE mà User này ĐÃ BẤM LƯU (status = 'claimed')
+    // LƯU Ý 2: Đối với mã COLLECTIBLE, vì số lượng đã bị trừ giữ chỗ từ lúc họ nhấn nút "Nhận mã",
+    // nên tại đây không cần lọc claimed_count < usage_limit nữa để đảm bảo quyền lợi cho họ.
     const claimedWallet = await UserPromotion.find({
       user_id: userId,
-      status: 'claimed'
+      status: 'claimed' 
     })
     .populate({
       path: 'promotion_id',
-      // Lọc chặt chẽ điều kiện: chỉ lấy voucher gốc đang kích hoạt và còn hạn dùng
       match: { 
         is_active: true, 
         end_date: { $gte: ngayHienTai },
         start_date: { $lte: ngayHienTai }
       } 
-    });
+    }).lean();
 
-    // 3. Chuẩn hóa dữ liệu: Lọc bỏ bản ghi null/undefined và chuyển đổi sạch sẽ thành mảng Object phẳng đơn thuần
     const collectibleVouchers = claimedWallet
-      .filter(item => item.promotion_id !== null && item.promotion_id !== undefined)
-      .map(item => {
-        // Chuyển đổi mongoose document sang plain object để tránh lỗi đóng gói dữ liệu
-        const promoObj = item.promotion_id.toObject ? item.promotion_id.toObject() : item.promotion_id;
-        return promoObj;
-      });
+      .filter(item => item.promotion_id)
+      .map(item => item.promotion_id);
 
-    // 4. Khử trùng lặp (Đề phòng hiếm hoi hệ thống lỗi cấu hình khiến 1 mã xuất hiện 2 lần)
     const tatCaVouchers = [...publicVouchers, ...collectibleVouchers];
     const uniqueMap = new Map();
     tatCaVouchers.forEach(v => uniqueMap.set(v._id.toString(), v));
     
-    const hopNhatVouchers = Array.from(uniqueMap.values());
-
-    return res.status(200).json({
-      success: true,
-      data: hopNhatVouchers
-    });
+    return res.status(200).json({ success: true, data: Array.from(uniqueMap.values()) });
   } catch (error) {
     console.error("Lỗi getCheckoutVouchers:", error);
     return res.status(500).json({ success: false, message: "Không lấy được ví voucher!" });
