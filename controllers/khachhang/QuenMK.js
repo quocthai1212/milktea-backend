@@ -1,8 +1,9 @@
 const User = require('../../models/User'); 
 const bcrypt = require('bcryptjs'); 
-const { Resend } = require('resend'); // Sử dụng HTTP API của Resend
+const { Resend } = require('resend'); // 🔥 ĐÃ THAY THẾ: Import thư viện Resend thay cho Nodemailer
 
-// 1. CẤU HÌNH API KEY CỦA RESEND (Đã điền mã key thật của bạn)
+// 1. CẤU HÌNH API KEY CỦA RESEND
+// 🎯 BẠN CẦN LÀM: Thay thế chuỗi 're_...' bên dưới bằng mã API Key bạn lấy từ trang Resend.com
 const resend = new Resend('re_XyHqMqSf_FGByQFdNPQhYvqs3dPYkSqNv'); 
 
 // Lưu tạm OTP ở bộ nhớ RAM
@@ -33,10 +34,10 @@ exports.guiMaOTP = async (req, res) => {
         // Lưu OTP vào cache
         otpCache.set(email, { otp, expireAt });
 
-        // 3. Tiến hành gọi HTTP API gửi mail của Resend (Không lo bị Render chặn cổng)
+        // 3. Tiến hành gọi HTTP API gửi mail của Resend (Chạy cổng web 443 nên Render thả xích 100%)
         const { data, error } = await resend.emails.send({
-            // ⚠️ LƯU Ý CHO TÀI KHOẢN FREE:
-            // - Dòng 'from' BẮT BUỘC giữ nguyên đuôi <onboarding@resend.dev>
+            // ⚠️ LƯU Ý QUAN TRỌNG CHO TÀI KHOẢN FREE:
+            // - Dòng 'from' BẮT BUỘC giữ nguyên là 'onboarding@resend.dev'
             // - Dòng 'to' (email nhận) phải là CHÍNH EMAIL bạn dùng để đăng ký tài khoản Resend khi test đồ án.
             from: 'MilkTea Paradise <onboarding@resend.dev>', 
             to: email, 

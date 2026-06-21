@@ -1,8 +1,18 @@
 const Product = require('../../models/Product');
+const Category = require('../../models/Category'); // 🌟 IMPORT THÊM MODEL DANH MỤC ĐỂ LẤY ĐƯỜNG DẪN CSDL
+const cloudinary = require('cloudinary').v2; 
 const fs = require('fs');
-const path = require('path');
 
-// Hàm bổ trợ: Tự động dọn dẹp các ảnh vừa upload lên nếu dữ liệu đầu vào (Text) bị lỗi validate
+// =========================================================================
+// ⚙️ CẤU HÌNH CLOUDINARY
+// =========================================================================
+cloudinary.config({
+  cloud_name: 'dujhb2n60', 
+  api_key: '269411484339472',       
+  api_secret: 'e18Y7VvIVJCFmlaFDeq0vi5R-3A'  
+});
+
+// Hàm bổ trợ: Tự động dọn dẹp các file tạm lưu trong thư mục multer (ổ cứng) nếu quá trình xử lý bị lỗi
 const xoaAnhTamThoi = (files) => {
   if (!files) return;
   if (files['avatar']) {
@@ -13,8 +23,25 @@ const xoaAnhTamThoi = (files) => {
   }
 };
 
+// Hàm bổ trợ: Trích xuất chính xác Public ID bao gồm cả cây thư mục lồng nhau từ URL Cloudinary để xóa ảnh
+const getPublicIdFromUrl = (url) => {
+  if (!url || !url.includes('cloudinary.com')) return null;
+  try {
+    const parts = url.split('/');
+    const uploadIndex = parts.indexOf('upload');
+    if (uploadIndex !== -1 && parts.length > uploadIndex + 2) {
+      // Bốc toàn bộ cụm phía sau v12345678/ và bỏ đuôi mở rộng file (.png, .jpg)
+      const publicIdWithVersion = parts.slice(uploadIndex + 2).join('/');
+      return publicIdWithVersion.substring(0, publicIdWithVersion.lastIndexOf('.'));
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+};
+
 // =========================================================================
-// 🔍 1. LẤY DANH SÁCH SẢN PHẨM (Dành cho trang Quản trị)
+// 🔍 1. LẤY DANH SÁCH SẢN PHẨM (Giữ nguyên)
 // =========================================================================
 exports.getsanpham = async (req, res) => {
   try {
@@ -26,7 +53,7 @@ exports.getsanpham = async (req, res) => {
 };
 
 // =========================================================================
-// ➕ 2. THÊM SẢN PHẨM MỚI (Lưu ảnh vào ổ cứng & CSDL dựa vào danh mục cha)
+// ➕ 2. THÊM SẢN PHẨM MỚI (Tự động lồng vào đúng thư mục Danh mục trong CSDL)
 // =========================================================================
 exports.addsanpham = async (req, res) => {
   try {
@@ -37,19 +64,33 @@ exports.addsanpham = async (req, res) => {
       return res.status(400).json({ success: false, message: "Vui lòng nhập đầy đủ Tên món, Loại và Giá gốc!" });
     }
 
-    const backendRootDir = process.cwd();
+    // 🌟 BƯỚC QUAN TRỌNG: Tìm thông tin danh mục của sản phẩm này trong DB để bốc folder_path gốc
+    const danhMucGoc = await Category.findById(category);
+    // Nếu tìm thấy trong CSDL thì lấy folder_path gốc (Ví dụ: "milktea/categories/tra-sua"), ngược lại dùng fallback "milktea"
+    const rootCategoryFolder = danhMucGoc && danhMucGoc.folder_path ? danhMucGoc.folder_path : 'milktea';
 
     let dbAvatarPath = "";
+    // Đẩy ảnh Avatar vào thư mục: milktea/categories/ten-danh-muc/avatar
     if (req.files && req.files['avatar'] && req.files['avatar'].length > 0) {
-      dbAvatarPath = req.files['avatar'][0].path.replace(backendRootDir + path.sep, "").replace(/\\/g, "/");
+      const uploadResult = await cloudinary.uploader.upload(req.files['avatar'][0].path, {
+        folder: `${rootCategoryFolder}/avatar` 
+      });
+      dbAvatarPath = uploadResult.secure_url; 
     }
 
     let dbImagesPaths = [];
+    // Đẩy danh sách ảnh phụ vào thư mục: milktea/categories/ten-danh-muc/album
     if (req.files && req.files['images'] && req.files['images'].length > 0) {
-      dbImagesPaths = req.files['images'].map(file => {
-        return file.path.replace(backendRootDir + path.sep, "").replace(/\\/g, "/");
-      });
+      for (const file of req.files['images']) {
+        const uploadResult = await cloudinary.uploader.upload(file.path, {
+          folder: `${rootCategoryFolder}/album`
+        });
+        dbImagesPaths.push(uploadResult.secure_url);
+      }
     }
+
+    // Xóa file tạm ở đĩa cứng vật lý
+    xoaAnhTamThoi(req.files);
 
     const sanPhamMoi = new Product({
       product_name: product_name.trim(),
@@ -64,7 +105,7 @@ exports.addsanpham = async (req, res) => {
     });
 
     await sanPhamMoi.save();
-    return res.status(201).json({ success: true, message: `Đã thêm món ${product_name} vào menu thành công!`, data: sanPhamMoi });
+    return res.status(201).json({ success: true, message: `Đã thêm món ${product_name} thành công!`, data: sanPhamMoi });
   } catch (error) {
     xoaAnhTamThoi(req.files);
     return res.status(500).json({ success: false, message: "Lỗi hệ thống không thể thêm món!", error: error.message });
@@ -72,7 +113,7 @@ exports.addsanpham = async (req, res) => {
 };
 
 // =========================================================================
-// ✏️ 3. SỬA THÔNG TIN SẢN PHẨM (XỬ LÝ LỌC XÓA ẢNH CŨ VÀ THÊM ẢNH MỚI)
+// ✏️ 3. SỬA THÔNG TIN SẢN PHẨM (Tự động nhận diện thư mục mới khi đổi danh mục)
 // =========================================================================
 exports.updatesanpham = async (req, res) => {
   try {
@@ -85,77 +126,70 @@ exports.updatesanpham = async (req, res) => {
       return res.status(404).json({ success: false, message: "Không tìm thấy món này!" });
     }
 
-    const backendRootDir = process.cwd();
+    // 🌟 Xác định ID danh mục đích (nếu đổi loại mới thì lấy category mới, còn không giữ nguyên loại cũ)
+    const targetCategoryId = category || sanPham.category;
+    const danhMucGoc = await Category.findById(targetCategoryId);
+    const rootCategoryFolder = danhMucGoc && danhMucGoc.folder_path ? danhMucGoc.folder_path : 'milktea';
 
-    // ---------------------------------------------------------------------
     // A. XỬ LÝ SỬA ẢNH ĐẠI DIỆN (AVATAR)
-    // ---------------------------------------------------------------------
     if (req.files && req.files['avatar'] && req.files['avatar'].length > 0) {
-      if (sanPham.avatar && sanPham.avatar.trim() !== "") {
-        const oldAvatarPath = path.join(backendRootDir, sanPham.avatar);
-        if (fs.existsSync(oldAvatarPath)) {
-          fs.unlinkSync(oldAvatarPath);
-          console.log(`✏️ Đã xóa file ảnh đại diện cũ trên máy: ${oldAvatarPath}`);
-        }
+      // Xóa ảnh cũ trên Cloudinary nếu có
+      if (sanPham.avatar && sanPham.avatar.startsWith('http')) {
+        const publicId = getPublicIdFromUrl(sanPham.avatar);
+        if (publicId) await cloudinary.uploader.destroy(publicId);
       }
-      sanPham.avatar = req.files['avatar'][0].path.replace(backendRootDir + path.sep, "").replace(/\\/g, "/");
+      // Upload ảnh mới vào đúng thư mục avatar của danh mục hiện tại
+      const uploadResult = await cloudinary.uploader.upload(req.files['avatar'][0].path, { 
+        folder: `${rootCategoryFolder}/avatar` 
+      });
+      sanPham.avatar = uploadResult.secure_url;
     }
 
-    // ---------------------------------------------------------------------
-    // B. 🌟 XỬ LÝ ALBUM ẢNH PHỤ TÍCH LŨY (XÓA ẢNH BỊ LOẠI BỎ & THÊM ẢNH MỚI)
-    // ---------------------------------------------------------------------
+    // B. XỬ LÝ ALBUM ẢNH PHỤ TÍCH LŨY
     let mangAnhCuConLai = [];
     if (remain_images) {
-      // Parse mảng ảnh cũ còn lại được Frontend gửi lên dưới dạng JSON string
       mangAnhCuConLai = typeof remain_images === 'string' ? JSON.parse(remain_images) : remain_images;
     }
 
-    // Bước 1: Quét và dọn dẹp các tệp tin vật lý của những ảnh đã bị người dùng bấm 'X' xóa bỏ
+    // Xóa các ảnh phụ bị Frontend loại bỏ khỏi Cloudinary
     if (sanPham.images && sanPham.images.length > 0) {
-      sanPham.images.forEach(oldImagePath => {
-        // Nếu ảnh từng tồn tại trong DB nhưng hiện tại không nằm trong danh sách giữ lại -> Xóa file cứng
-        if (!mangAnhCuConLai.includes(oldImagePath)) {
-          const absoluteOldPath = path.join(backendRootDir, oldImagePath);
-          if (fs.existsSync(absoluteOldPath)) {
-            fs.unlinkSync(absoluteOldPath);
-            console.log(`🗑️ Đã xóa file ảnh phụ bị loại bỏ trên ổ cứng: ${absoluteOldPath}`);
-          }
+      for (const oldImageUrl of sanPham.images) {
+        if (!mangAnhCuConLai.includes(oldImageUrl)) {
+          const publicId = getPublicIdFromUrl(oldImageUrl);
+          if (publicId) await cloudinary.uploader.destroy(publicId);
         }
-      });
+      }
     }
 
-    // Bước 2: Thu thập đường dẫn của các file ảnh phụ MỚI chọn thêm (nếu có)
+    // Tải các ảnh phụ MỚI chọn thêm lên thư mục album của danh mục hiện tại
     let mangAnhPhuMoi = [];
     if (req.files && req.files['images'] && req.files['images'].length > 0) {
-      mangAnhPhuMoi = req.files['images'].map(file => {
-        return file.path.replace(backendRootDir + path.sep, "").replace(/\\/g, "/");
-      });
+      for (const file of req.files['images']) {
+        const uploadResult = await cloudinary.uploader.upload(file.path, { 
+          folder: `${rootCategoryFolder}/album` 
+        });
+        mangAnhPhuMoi.push(uploadResult.secure_url);
+      }
     }
 
-    // Bước 3: Hợp nhất (Tích lũy) = Ảnh cũ còn lại + Ảnh mới upload thêm vào làm mảng dữ liệu mới cho sản phẩm
+    // Dọn dẹp tệp tạm local trên ổ cứng
+    xoaAnhTamThoi(req.files);
+
+    // Hợp nhất mảng ảnh cũ và mới
     sanPham.images = [...mangAnhCuConLai, ...mangAnhPhuMoi];
 
-
-    // ---------------------------------------------------------------------
-    // C. CẬP NHẬT CÁC THÔNG TIN DẠNG CHỮ KHÁC
-    // ---------------------------------------------------------------------
+    // C. CẬP NHẬT CÁC THÔNG TIN KHÁC
     if (product_name) sanPham.product_name = product_name.trim();
     if (base_price !== undefined) sanPham.base_price = Number(base_price);
     if (category) sanPham.category = category;
     if (description !== undefined) sanPham.description = description;
-    if (is_active !== undefined) {
-      sanPham.is_active = is_active === 'true' || is_active === true;
-    }
+    if (is_active !== undefined) sanPham.is_active = is_active === 'true' || is_active === true;
     
-    if (toppings !== undefined) {
-      sanPham.toppings = typeof toppings === 'string' ? JSON.parse(toppings) : toppings;
-    }
-    if (sizes !== undefined) {
-      sanPham.sizes = typeof sizes === 'string' ? JSON.parse(sizes) : sizes;
-    }
+    if (toppings !== undefined) sanPham.toppings = typeof toppings === 'string' ? JSON.parse(toppings) : toppings;
+    if (sizes !== undefined) sanPham.sizes = typeof sizes === 'string' ? JSON.parse(sizes) : sizes;
 
-    await sanPham.save(); // Thực hiện lưu lại toàn bộ thay đổi mới vào MongoDB
-    return res.status(200).json({ success: true, message: "Cập nhật thông tin món và hình ảnh thành công!", data: sanPham });
+    await sanPham.save();
+    return res.status(200).json({ success: true, message: "Cập nhật thông tin món thành công!", data: sanPham });
   } catch (error) {
     xoaAnhTamThoi(req.files);
     return res.status(500).json({ success: false, message: "Lỗi không thể cập nhật thông tin món!", error: error.message });
@@ -163,43 +197,31 @@ exports.updatesanpham = async (req, res) => {
 };
 
 // =========================================================================
-// 🗑️ 4. XÓA SẢN PHẨM KHỎI MENU (Xóa sạch bách toàn bộ các file ảnh trên ổ cứng)
+// 🗑️ 4. XÓA SẢN PHẨM KHỎI MENU (Dọn sạch ảnh theo URL dựa vào Public ID cụ thể)
 // =========================================================================
 exports.deletesanpham = async (req, res) => {
   try {
     const { id } = req.params;
 
     const sanPham = await Product.findById(id);
-    if (!sanPham) {
-      return res.status(404).json({ success: false, message: "Không tìm thấy món để xóa!" });
+    if (!sanPham) return res.status(404).json({ success: false, message: "Không tìm thấy món để xóa!" });
+
+    // Xóa ảnh avatar trên Cloudinary
+    if (sanPham.avatar && sanPham.avatar.startsWith('http')) {
+      const publicId = getPublicIdFromUrl(sanPham.avatar);
+      if (publicId) await cloudinary.uploader.destroy(publicId);
     }
 
-    const backendRootDir = process.cwd();
-
-    if (sanPham.avatar && sanPham.avatar.trim() !== "") {
-      const avatarPath = path.join(backendRootDir, sanPham.avatar);
-      if (fs.existsSync(avatarPath)) {
-        fs.unlinkSync(avatarPath);
-        console.log(`🗑️ Đã xóa file ảnh đại diện thành công tại: ${avatarPath}`);
+    // Xóa các hình ảnh album phụ trên Cloudinary
+    if (sanPham.images && sanPham.images.length > 0) {
+      for (const imageUrl of sanPham.images) {
+        const publicId = getPublicIdFromUrl(imageUrl);
+        if (publicId) await cloudinary.uploader.destroy(publicId);
       }
     }
 
-    if (sanPham.images && sanPham.images.length > 0) {
-      sanPham.images.forEach(imagePath => {
-        const absoluteImagePath = path.join(backendRootDir, imagePath);
-        if (fs.existsSync(absoluteImagePath)) {
-          fs.unlinkSync(absoluteImagePath);
-          console.log(`🗑️ Đã xóa file ảnh giới thiệu thành công tại: ${absoluteImagePath}`);
-        }
-      });
-    }
-
     await Product.findByIdAndDelete(id);
-    
-    return res.status(200).json({ 
-      success: true, 
-      message: `Đã xóa hoàn toàn món [${sanPham.product_name}] cùng toàn bộ kho hình ảnh vật lý đi kèm!` 
-    });
+    return res.status(200).json({ success: true, message: `Đã xóa hoàn toàn món [${sanPham.product_name}] khỏi hệ thống!` });
   } catch (error) {
     return res.status(500).json({ success: false, message: "Lỗi hệ thống không thể xóa món!", error: error.message });
   }

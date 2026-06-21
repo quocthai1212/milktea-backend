@@ -1,10 +1,18 @@
-const Category = require('../../models/Category'); // Khai báo Model Danh mục bạn vừa gửi
+const Category = require('../../models/Category'); 
 const Product = require('../../models/Product');
-const fs = require('fs');
-const path = require('path');
+const cloudinary = require('cloudinary').v2;
 
 // =========================================================================
-// 1. CHỨC NĂNG: THÊM DANH MỤC & TẠO THƯ MỤC VẬT LÝ Ở BACKEND
+// ⚙️ CẤU HÌNH CLOUDINARY
+// =========================================================================
+cloudinary.config({
+  cloud_name: 'dujhb2n60', 
+  api_key: '269411484339472',       
+  api_secret: 'e18Y7VvIVJCFmlaFDeq0vi5R-3A'  
+});
+
+// =========================================================================
+// ➕ 1. CHỨC NĂNG: THÊM DANH MỤC & TẠO THƯ MỤC TRÊN CLOUDINARY NGAY LẬP TỨC
 // =========================================================================
 exports.addCategory = async (req, res) => {
   try {
@@ -21,7 +29,6 @@ exports.addCategory = async (req, res) => {
     }
 
     // 🌟 CHUẨN HÓA: Biến tên danh mục có dấu thành tên thư mục không dấu, gạch ngang
-    // Ví dụ: "Trà Sữa Matcha" -> "tra-sua-matcha"
     const folderName = category_name
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
@@ -31,34 +38,30 @@ exports.addCategory = async (req, res) => {
       .trim()
       .replace(/\s+/g, "-");
 
-    // 2. Định nghĩa đường dẫn tương đối để lưu vào CSDL (Database)
-    const relativePath = `uploads/categories/${folderName}`; 
+    // Đường dẫn gốc của danh mục này trên Cloudinary
+    const cloudFolderPath = `milktea/categories/${folderName}`; 
 
-    // 3. Tính toán đường dẫn tuyệt đối để tạo thư mục vật lý trên ổ đĩa D:
-    // __dirname hiện tại là: D:\BAOCAO\milktea-backend\controllers\quantri
-    // Nhảy ngược 3 cấp (../../..) sẽ về: D:\BAOCAO\milktea-backend
-    const backendRootDir = process.cwd(); 
-    const targetDirPath = path.join(backendRootDir, relativePath); 
-
-    // Lệnh in kiểm tra ra màn hình Terminal Node để bạn nhìn thấy tận mắt
-    console.log("👉 Đường dẫn thực tế thư mục đang tạo:", targetDirPath);
-    // 4. Lệnh kiểm tra và tự động tạo thư mục trên ổ cứng máy tính
-    if (!fs.existsSync(targetDirPath)) {
-    fs.mkdirSync(targetDirPath, { recursive: true });
+    // 🌟 GỌI CLOUDINARY TẠO THƯ MỤC THEO TÊN DANH MỤC NGAY LẬP TỨC
+    try {
+      await cloudinary.api.create_folder(cloudFolderPath);
+      console.log(`✨ Đã tạo thư mục thành công trên Cloudinary: ${cloudFolderPath}`);
+    } catch (cloudError) {
+      console.error("Lỗi tạo thư mục danh mục trên Cloudinary:", cloudError.message);
     }
+
     // Lưu thông tin danh mục mới vào MongoDB
     const danhMucMoi = new Category({
       category_name: category_name.trim(),
       description: description || "",
       is_active: is_active !== undefined ? is_active : true,
-      folder_path: relativePath // Kết quả lưu trong DB: "uploads/categories/tra-sua-matcha"
+      folder_path: cloudFolderPath // Lưu vào DB: "milktea/categories/tra-sua-matcha"
     });
 
     await danhMucMoi.save();
 
     return res.status(201).json({
       success: true,
-      message: `Đã tạo danh mục và thư mục vật lý thành công tại: ${relativePath}`,
+      message: `Đã tạo danh mục và thư mục [${folderName}] thành công trên Cloudinary!`,
       data: danhMucMoi
     });
 
@@ -72,165 +75,152 @@ exports.addCategory = async (req, res) => {
 };
 
 // =========================================================================
-// 2. CHỨC NĂNG: LẤY TOÀN BỘ DANH SÁCH DANH MỤC
+// 🔍 2. CHỨC NĂNG: LẤY TOÀN BỘ DANH SÁCH DANH MỤC
 // =========================================================================
 exports.getAllCategories = async (req, res) => {
-    try {
-      const danhSach = await Category.aggregate([
-        {
-          $lookup: {
-            from: 'products',          // Tên collection trong MongoDB (Mongoose tự động đặt số nhiều viết thường)
-            localField: '_id',         // ID của danh mục (_id trong bảng Category)
-            foreignField: 'category',  // 🌟 ĐÃ ĐỔI: Khớp với trường 'category' trong file code Product của bạn
-            as: 'cac_san_pham'
-          }
-        },
-        {
-          $project: {
-            category_name: 1,
-            description: 1,
-            is_active: 1,
-            folder_path: 1,
-            createdAt: 1,
-            // Đếm tổng số lượng phần tử có trong mảng sản phẩm lọc được
-            product_count: { $size: '$cac_san_pham' } 
-          }
-        },
-        {
-          $sort: { createdAt: -1 } // Mới nhất xếp lên đầu
+  try {
+    const danhSach = await Category.aggregate([
+      {
+        $lookup: {
+          from: 'products',          
+          localField: '_id',         
+          foreignField: 'category',  
+          as: 'cac_san_pham'
         }
-      ]);
-  
-      return res.status(200).json({
-        success: true,
-        data: danhSach
-      });
-    } catch (error) {
-      return res.status(500).json({
-        success: false,
-        message: "Lỗi hệ thống không thể tính toán số lượng sản phẩm danh mục!",
-        error: error.message
-      });
-    }
-  };
+      },
+      {
+        $project: {
+          category_name: 1,
+          description: 1,
+          is_active: 1,
+          folder_path: 1,
+          createdAt: 1,
+          product_count: { $size: '$cac_san_pham' } 
+        }
+      },
+      {
+        $sort: { createdAt: -1 } 
+      }
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: danhSach
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Lỗi hệ thống không thể tính toán số lượng sản phẩm danh mục!",
+      error: error.message
+    });
+  }
+};
 
 // =========================================================================
-// 3. CHỨC NĂNG: CẬP NHẬT DANH MỤC (KHÔNG ĐỔI ĐƯỜNG DẪN THƯ MỤC CŨ)
-// =========================================================================
-// =========================================================================
-// 3. CHỨC NĂNG: CẬP NHẬT DANH MỤC & ĐỔI TÊN THƯ MỤC VẬT LÝ TƯƠNG ỨNG
+// ✏️ 3. CHỨC NĂNG: CẬP NHẬT DANH MỤC & ĐỔI TÊN THƯ MỤC TRÊN CLOUD
 // =========================================================================
 exports.updateCategory = async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { category_name, description, is_active } = req.body;
-  
-      const danhMuc = await Category.findById(id);
-      if (!danhMuc) {
-        return res.status(404).json({ success: false, message: "Không tìm thấy danh mục này!" });
-      }
-  
-      // Kiểm tra xem người dùng có thay đổi tên danh mục hay không
-      if (category_name && category_name.trim() !== danhMuc.category_name) {
-        const nameTrimmed = category_name.trim();
-        
-        // 1. Kiểm tra xem tên mới có bị trùng với danh mục khác trong DB không
-        const trungTen = await Category.findOne({ category_name: nameTrimmed });
-        if (trungTen) {
-          return res.status(400).json({ success: false, message: "Tên danh mục mới này đã tồn tại!" });
-        }
-  
-        // 2. Chuẩn hóa tên thư mục MỚI từ tên danh mục mới
-        const newFolderName = nameTrimmed
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .replace(/đ/g, "d").replace(/Đ/g, "d")
-          .toLowerCase()
-          .replace(/[^a-z0-9 ]/g, "")
-          .trim()
-          .replace(/\s+/g, "-");
-  
-        const newRelativePath = `uploads/categories/${newFolderName}`;
-        const backendRootDir = process.cwd();
-  
-        // 3. XỬ LÝ ĐỔI TÊN THƯ MỤC TRÊN Ổ CỨNG
-        if (danhMuc.folder_path) {
-          const oldDirPath = path.join(backendRootDir, danhMuc.folder_path);
-          const newDirPath = path.join(backendRootDir, newRelativePath);
-  
-          // Nếu thư mục cũ THỰC SỰ TỒN TẠI trên ổ đĩa và tên thư mục mới khác tên cũ
-          if (fs.existsSync(oldDirPath) && oldDirPath !== newDirPath) {
-            fs.renameSync(oldDirPath, newDirPath);
-            console.log(`✏️ Đã đổi tên thư mục vật lý từ [${danhMuc.folder_path}] thành [${newRelativePath}]`);
-          } else if (!fs.existsSync(oldDirPath)) {
-            // Trường hợp hi hữu: DB có đường dẫn nhưng ổ cứng chưa có thư mục (do trước đó lỗi), ta tự tạo mới luôn
-            fs.mkdirSync(newDirPath, { recursive: true });
-          }
-        }
-  
-        // 4. Cập nhật thông tin mới vào đối tượng danh mục
-        danhMuc.category_name = nameTrimmed;
-        danhMuc.folder_path = newRelativePath; // Cập nhật đường dẫn mới vào DB
-      }
-  
-      // Cập nhật các trường thông tin khác nếu có truyền lên
-      if (description !== undefined) danhMuc.description = description;
-      if (is_active !== undefined) danhMuc.is_active = is_active;
-  
-      // Lưu mọi thay đổi vào MongoDB
-      await danhMuc.save();
-      
-      return res.status(200).json({
-        success: true,
-        message: "Cập nhật thông tin danh mục và thư mục vật lý thành công!",
-        data: danhMuc
-      });
-    } catch (error) {
-      return res.status(500).json({ success: false, message: "Lỗi không thể cập nhật danh mục!", error: error.message });
+  try {
+    const { id } = req.params;
+    const { category_name, description, is_active } = req.body;
+
+    const danhMuc = await Category.findById(id);
+    if (!danhMuc) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy danh mục này!" });
     }
-  };
+
+    // Kiểm tra xem người dùng có thay đổi tên danh mục hay không
+    if (category_name && category_name.trim() !== danhMuc.category_name) {
+      const nameTrimmed = category_name.trim();
+      
+      const trungTen = await Category.findOne({ category_name: nameTrimmed });
+      if (trungTen) {
+        return res.status(400).json({ success: false, message: "Tên danh mục mới này đã tồn tại!" });
+      }
+
+      // Chuẩn hóa tên thư mục MỚI
+      const newFolderName = nameTrimmed
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/đ/g, "d").replace(/Đ/g, "d")
+        .toLowerCase()
+        .replace(/[^a-z0-9 ]/g, "")
+        .trim()
+        .replace(/\s+/g, "-");
+
+      const newCloudPath = `milktea/categories/${newFolderName}`;
+
+      // 🌟 TỰ ĐỘNG TẠO TIẾP THƯ MỤC THEO TÊN MỚI TRÊN CLOUDINARY
+      try {
+        await cloudinary.api.create_folder(newCloudPath);
+        console.log(`✏️ Đã tạo thư mục mới trên Cloudinary: ${newCloudPath}`);
+      } catch (e) {
+        console.log("Thư mục mới đã tồn tại hoặc có lỗi:", e.message);
+      }
+
+      danhMuc.category_name = nameTrimmed;
+      danhMuc.folder_path = newCloudPath; 
+    }
+
+    if (description !== undefined) danhMuc.description = description;
+    if (is_active !== undefined) danhMuc.is_active = is_active;
+
+    await danhMuc.save();
+    
+    return res.status(200).json({
+      success: true,
+      message: "Cập nhật thông tin danh mục thành công!",
+      data: danhMuc
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Lỗi không thể cập nhật danh mục!", error: error.message });
+  }
+};
+
 // =========================================================================
-// 4. CHỨC NĂNG: XÓA DANH MỤC KHỎI HỆ THỐNG
-// =========================================================================
-// =========================================================================
-// 4. CHỨC NĂNG: XÓA DANH MỤC KHỎI HỆ THỐNG & XÓA THƯ MỤC VẬT LÝ
+// 🗑️ 4. CHỨC NĂNG: XÓA DANH MỤC & DỌN DẸP SẠCH SẼ THƯ MỤC TRÊN CLOUDINARY
 // =========================================================================
 exports.deleteCategory = async (req, res) => {
-    try {
-      const { id } = req.params;
-  
-      // 1. Tìm danh mục trong CSDL trước để lấy được trường 'folder_path'
-      const danhMuc = await Category.findById(id);
-      if (!danhMuc) {
-        return res.status(404).json({ success: false, message: "Không tìm thấy danh mục cần xóa!" });
-      }
-  
-      // 2. Tiến hành xóa thư mục vật lý ngoài đời thực (nếu có lưu folder_path)
-      if (danhMuc.folder_path) {
-        const backendRootDir = process.cwd(); // Lấy đường dẫn gốc của dự án
-        const targetDirPath = path.join(backendRootDir, danhMuc.folder_path);
-  
-        // Kiểm tra xem thư mục đó thực sự có tồn tại trên ổ đĩa không
-        if (fs.existsSync(targetDirPath)) {
-          // Lệnh xóa thư mục kèm theo tất cả các file/thư mục con bên trong nó (áp dụng cho Node.js 14.14.0+)
-          fs.rmSync(targetDirPath, { recursive: true, force: true });
-          console.log(`🗑️ Đã xóa thư mục vật lý tại: ${targetDirPath}`);
-        }
-      }
-  
-      // 3. Sau khi xóa thư mục xong, tiến hành xóa bản ghi trong CSDL MongoDB
-      await Category.findByIdAndDelete(id);
-  
-      return res.status(200).json({
-        success: true,
-        message: `Đã xóa hoàn toàn danh mục [${danhMuc.category_name}] và thư mục hình ảnh đi kèm!`
-      });
-  
-    } catch (error) {
-      return res.status(500).json({ 
-        success: false, 
-        message: "Lỗi không thể xóa danh mục và thư mục vật lý!", 
-        error: error.message 
-      });
+  try {
+    const { id } = req.params;
+
+    // 1. Tìm danh mục trong CSDL
+    const danhMuc = await Category.findById(id);
+    if (!danhMuc) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy danh mục cần xóa!" });
     }
-  };
+
+    // 2. Xử lý dọn dẹp toàn bộ dữ liệu & cấu trúc thư mục trên Cloudinary
+    if (danhMuc.folder_path) {
+      try {
+        // Bước A: Xóa sạch toàn bộ file ảnh nằm bên trong (quét sâu qua tiền tố đường dẫn)
+        await cloudinary.api.delete_resources_by_prefix(`${danhMuc.folder_path}/`);
+        
+        // Bước B: Xóa lần lượt các thư mục con rỗng (avatar và album) nếu có phát sinh từ API sản phẩm
+        await cloudinary.api.delete_folder(`${danhMuc.folder_path}/avatar`).catch(() => {});
+        await cloudinary.api.delete_folder(`${danhMuc.folder_path}/album`).catch(() => {});
+        
+        // Bước C: Xóa chính thư mục gốc mang tên danh mục đó
+        await cloudinary.api.delete_folder(danhMuc.folder_path);
+        console.log(`🗑️ Đã xóa sạch cấu trúc thư mục [${danhMuc.folder_path}] trên Cloudinary`);
+      } catch (cloudError) {
+        console.log("Thông báo dọn dẹp Cloudinary (Bỏ qua nếu thư mục trống):", cloudError.message);
+      }
+    }
+
+    // 3. Tiến hành xóa bản ghi trong CSDL MongoDB
+    await Category.findByIdAndDelete(id);
+
+    return res.status(200).json({
+      success: true,
+      message: `Đã xóa hoàn toàn danh mục [${danhMuc.category_name}] khỏi hệ thống!`
+    });
+
+  } catch (error) {
+    return res.status(500).json({ 
+      success: false, 
+      message: "Lỗi không thể xóa danh mục!", 
+      error: error.message 
+    });
+  }
+};

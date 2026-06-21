@@ -142,7 +142,7 @@ const getProductReviews = async (req, res) => {
 
 /**
  * @route   GET /api/khachhang/don-hang
- * @desc    Lấy danh sách đơn hàng kèm thông tin CHI NHÁNH và trạng thái đánh giá sản phẩm
+ * @desc    Lấy danh sách đơn hàng kèm thông tin CHI NHÁNH và link ảnh từ trường avatar của Product
  */
 const getOrders = async (req, res) => {
   try {
@@ -151,30 +151,39 @@ const getOrders = async (req, res) => {
       return res.status(400).json({ success: false, message: "Thiếu user_id!" });
     }
 
-    // Kiểm tra tính hợp lệ của chuỗi ObjectId gửi lên từ Frontend
     if (!mongoose.isValidObjectId(user_id)) {
       return res.status(400).json({ success: false, message: "Định dạng user_id không hợp lệ!" });
     }
 
-    // 1. Sử dụng Aggregate Lookup để JOIN với collection chứa chi nhánh (shippingconfigs)
+    // 1. Sử dụng Aggregate nâng cao để JOIN chi nhánh VÀ bảng Sản phẩm (Product)
     const orders = await Order.aggregate([
       { 
         $match: { 
           customer_id: new mongoose.Types.ObjectId(user_id) 
         } 
       },
+      // Lookup 1: Lấy thông tin chi nhánh
       {
         $lookup: {
-          from: 'shippingconfigs',     // Collection chứa dữ liệu chi nhánh trong cơ sở dữ liệu
-          localField: 'branch_id',     // Trường liên kết nằm trong Order
-          foreignField: '_id',         // Khóa chính nằm trong bảng chi nhánh
-          as: 'branch_info'            // Đổ tạm dữ liệu tìm được thành mảng branch_info
+          from: 'shippingconfigs', 
+          localField: 'branch_id', 
+          foreignField: '_id',    
+          as: 'branch_info'       
         }
       },
       {
         $unwind: {
           path: '$branch_info',
-          preserveNullAndEmptyArrays: true // Giữ lại đơn hàng cũ nếu chi nhánh đó lỡ bị xóa
+          preserveNullAndEmptyArrays: true 
+        }
+      },
+      // 🔥 LOOKUP 2: Lấy dữ liệu sản phẩm gốc để bốc đường dẫn ảnh Cloudinary
+      {
+        $lookup: {
+          from: 'products',
+          localField: 'items.product_id',
+          foreignField: '_id',
+          as: 'db_products'
         }
       },
       { 
@@ -203,19 +212,30 @@ const getOrders = async (req, res) => {
       });
     }
 
-    // 3. Chuẩn hóa dữ liệu đầu ra: Đè object chi nhánh & xử lý mảng items
+    // 3. Chuẩn hóa dữ liệu đầu ra: Đính kèm ảnh từ CSDL vào từng item
     const formattedOrders = orders.map(order => {
       let updatedItems = order.items || [];
+      const dbProducts = order.db_products || []; 
       
-      if (order.status === 'completed' && order.items) {
-        updatedItems = order.items.map(item => {
-          if (item.product_id) {
+      updatedItems = updatedItems.map(item => {
+        if (item.product_id) {
+          // Khớp phần tử trong mảng với dữ liệu gốc của bảng Product
+          const sanPhamGoc = dbProducts.find(p => p._id.toString() === item.product_id.toString());
+          
+          // 🔥 ĐỔI TẠI ĐÂY: Lấy trường .avatar của CSDL ném vào trường .product_image gửi về cho Client
+          let baseItem = {
+            ...item,
+            product_image: sanPhamGoc?.avatar || item.product_image || item.avatar || ''
+          };
+
+          // Kiểm tra và đính kèm thông tin đánh giá nếu đơn hàng đã hoàn thành
+          if (order.status === 'completed') {
             const key = `${order._id.toString()}_${item.product_id.toString()}`;
             const matchedReview = reviewMap.get(key);
 
             if (matchedReview) {
               return {
-                ...item,
+                ...baseItem,
                 is_reviewed: true,
                 my_review: {
                   rating: matchedReview.rating,
@@ -225,22 +245,25 @@ const getOrders = async (req, res) => {
               };
             }
           }
+
           return {
-            ...item,
+            ...baseItem,
             is_reviewed: false,
             my_review: null
           };
-        });
-      }
+        }
+        
+        return item;
+      });
 
-      // Đè cấu trúc `branch_id` thành một Object chứa thông tin đầy đủ thay vì chuỗi ID thô ban đầu
       return {
         ...order,
         items: updatedItems,
+        db_products: undefined, // Xóa mảng tạm này đi cho nhẹ data
         branch_id: order.branch_info ? {
           _id: order.branch_info._id,
-          branch_name: order.branch_info.branch_name,   // Đã có tên chi nhánh
-          shop_address: order.branch_info.shop_address  // Đã có địa chỉ chi nhánh
+          branch_name: order.branch_info.branch_name,
+          shop_address: order.branch_info.shop_address
         } : null
       };
     });

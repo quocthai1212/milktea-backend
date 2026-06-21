@@ -3,7 +3,10 @@ const Order = require('../../models/Order');
 const User = require('../../models/User'); 
 
 // =========================================================================
-// 1. LẤY DANH SÁCH ĐƠN HÀNG DÀNH CHO SHIPPER (ĐÃ FIX SẠCH LỖI ÉP KIỂU OBJECTID)
+// 1. LẤY DANH SÁCH ĐƠN HÀNG DÀNH CHO SHIPPER (ĐÃ BỔ SUNG ĐỒNG BỘ HÌNH ẢNH)
+// =========================================================================
+// =========================================================================
+// 1. LẤY DANH SÁCH ĐƠN HÀNG DÀNH CHO SHIPPER (CHỈ THẤY ĐƠN READY + KHỚP CHI NHÁNH)
 // =========================================================================
 exports.getshipper_donhang = async (req, res) => {
   try {
@@ -17,7 +20,7 @@ exports.getshipper_donhang = async (req, res) => {
       return res.status(400).json({ success: false, message: "Thiếu mã định danh ID của tài xế!" });
     }
 
-    // 🔍 TẦNG 2: Tìm kiếm tài xế (Bất chấp ID là String hay ObjectId)
+    // 🔍 TẦNG 2: Tìm kiếm thông tin tài xế để lấy chi nhánh làm việc (branch_id)
     const thongTinShipper = await User.findOne({
       $or: [
         { _id: shipper_id },
@@ -32,37 +35,37 @@ exports.getshipper_donhang = async (req, res) => {
 
     let branch_id = thongTinShipper.branch_id;
     if (!branch_id) {
-      console.log("❌ [DEBUG] LỖI: Tài xế chưa được gán chi nhánh (branch_id bị null/undefined).");
+      console.log("❌ [DEBUG] LỖI: Tài xế chưa được gán chi nhánh.");
       return res.status(400).json({ success: false, message: "Tài xế chưa được gán chi nhánh làm việc!" });
     }
 
     const branchStr = branch_id.toString();
     const branchObjectId = mongoose.Types.ObjectId.isValid(branchStr) ? new mongoose.Types.ObjectId(branchStr) : null;
 
-    // 🛒 TẦNG 3: TRUY VẤN ĐƠN HÀNG (Sử dụng $and để bọc các $or độc lập, không lo trùng key)
+    // 🛒 TẦNG 3: TRUY VẤN ĐƠN HÀNG THEO YÊU CẦU NGHIỆP VỤ MỚI
     const queryDieuKien = {
-      order_type: 'online',
+      order_type: 'online', // Chỉ ship đơn online
       $and: [
-        // Điều kiện 1: Đơn hàng phải thuộc chi nhánh của tài xế
+        // Điều kiện bắt buộc: Đơn hàng và Shipper PHẢI CÙNG CHI NHÁNH
         {
           $or: [
             { branch_id: branchStr },
             { branch_id: branchObjectId }
           ]
         },
-        // Điều kiện 2: Trạng thái đơn và phân quyền tài xế
+        // Điều kiện phân luồng trạng thái nhận đơn
         {
           $or: [
-            // Trường hợp A: Đơn mới chờ lấy (preparing/ready) và CHƯA CÓ tài xế nào nhận
+            // Luồng 1: Đơn của chi nhánh ĐÃ CHUẨN BỊ XONG (ready) và CHƯA CÓ ai nhận -> Hiện ở tab "Chờ lấy"
             {
-              status: { $in: ['preparing', 'ready'] },
+              status: 'ready', 
               $or: [
                 { shipper_id: { $exists: false } },
                 { shipper_id: null },
                 { shipper_id: { $type: "null" } }
               ]
             },
-            // Trường hợp B: Đơn đã nhận đích danh bởi chính shipper này
+            // Luồng 2: Các đơn mà chính Shipper này đang đi giao (shipping) hoặc đã xử lý xong (completed, failed)
             { 
               $or: [
                 { shipper_id: shipper_id },
@@ -74,30 +77,49 @@ exports.getshipper_donhang = async (req, res) => {
       ]
     };
 
-    console.log("🔍 [DEBUG] Tiến hành quét đơn hàng với cấu trúc chuẩn...");
+    console.log(`🔍 [DEBUG] Đang quét đơn hàng thuộc chi nhánh [${branchStr}]...`);
 
+    // Tiến hành query dữ liệu và nạp thông tin hình ảnh ('avatar') từ bảng Product
     const danhSachDonHang = await Order.find(queryDieuKien)
       .populate('customer_id', 'full_name phone')
       .populate({
         path: 'items.product_id',
-        select: 'name image' // Nạp thêm tên và hình ảnh gốc từ bảng Product
+        select: 'product_name avatar images' // ✅ SỬA TẠI ĐÂY: Gọi đúng trường 'avatar' và 'images' từ ProductSchema
       })
       .sort({ createdAt: -1 });
 
-    console.log(`📊 [DEBUG] THÀNH CÔNG: Đã tìm thấy [${danhSachDonHang.length}] đơn hàng hợp lệ.`);
+    // ✨ CHUẨN HÓA DỮ LIỆU ĐỂ TRẢ VỀ CHO FRONTEND ĐỒNG NHẤT
+    const duLieuSauFormat = danhSachDonHang.map(order => {
+      const orderObj = order.toObject();
+      
+      if (Array.isArray(orderObj.items)) {
+        orderObj.items = orderObj.items.map(item => {
+          // Trích xuất linh hoạt: Ưu tiên lấy trường 'avatar', nếu không có thì lấy ảnh đầu tiên trong mảng 'images'
+          const verifiedImage = item.product_id?.avatar || (item.product_id?.images?.[0]) || "";
+          
+          return {
+            ...item,
+            image: verifiedImage // ✅ Gán ra thuộc tính phẳng 'image' để Frontend chỉ cần gọi item.image
+          };
+        });
+      }
+      return orderObj;
+    });
+
+    console.log(`📊 [DEBUG] THÀNH CÔNG: Đã lọc và xử lý ảnh cho [${duLieuSauFormat.length}] đơn hàng.`);
     console.log("=========================================");
 
     return res.status(200).json({
       success: true,
       branch_id: branchStr,
-      data: danhSachDonHang
+      data: duLieuSauFormat
     });
 
   } catch (error) {
     console.error("❌ LỖI SẬP BACKEND (CRASH):", error);
     return res.status(500).json({
       success: false,
-      message: "Lỗi hệ thống không thể xử lý danh sách đơn hàng!",
+      message: "Lỗi hệ thống không thể tải dữ liệu đơn hàng!",
       error: error.message
     });
   }
